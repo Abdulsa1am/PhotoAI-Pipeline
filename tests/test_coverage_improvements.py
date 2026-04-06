@@ -8,6 +8,7 @@ import unittest
 from unittest import mock
 
 
+# Repository root is used to dynamically import numbered script files for testing.
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 
@@ -29,6 +30,13 @@ class TestBuildArchiveUtilities(unittest.TestCase):
             "4_build_archive.py",
             stubs={"numpy": numpy_stub},
         )
+
+    def setUp(self):
+        self._original_placed = set(self.mod.placed_source_paths)
+
+    def tearDown(self):
+        self.mod.placed_source_paths.clear()
+        self.mod.placed_source_paths.update(self._original_placed)
 
     def test_get_next_archive_dir_increments_highest_existing_number(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -69,8 +77,10 @@ class TestBuildArchiveUtilities(unittest.TestCase):
             with open(src, "w", encoding="utf-8") as f:
                 f.write("data")
 
-            with mock.patch.object(self.mod.os, "link", side_effect=OSError), \
-                 mock.patch.object(self.mod.shutil, "copy2", wraps=self.mod.shutil.copy2) as copy2_mock:
+            with (
+                mock.patch.object(self.mod.os, "link", side_effect=OSError),
+                mock.patch.object(self.mod.shutil, "copy2", wraps=self.mod.shutil.copy2) as copy2_mock,
+            ):
                 ok = self.mod.place_file(src, dst, mode="auto")
 
             self.assertTrue(ok)
