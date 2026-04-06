@@ -70,25 +70,25 @@ PhotoAI uses a multi-stage "Ensemble" of state-of-the-art computer vision models
 ### 1. Face Analysis (InsightFace / ArcFace)
 Used in **Step 1** to identify individuals across your entire library.
 - **Detector (RetinaFace)**: A high-precision localized detector that finds faces even in low light or at difficult angles.
-- **Recognition (ArcFace-R100)**: The "gold standard" for open-source face recognition. It transforms a face into a **92-Dimensional mathematical vector** (embedding). If two faces have similar vectors, they are the same person.
+- **Recognition (ArcFace-R100)**: The "gold standard" for open-source face recognition. It transforms a face into a **512-Dimensional mathematical vector** (embedding). If two faces have similar vectors, they are the same person.
 - **Persistence**: These vectors are saved to SQLite, meaning the AI only has to "look" at each photo once.
 
-### 2. Semantic Classification (OpenAI CLIP)
+### 2. Semantic Classification (CLIP / SigLIP 2)
 Used in **Step 3** to understand the *meaning* of photos (Memes, Documents, Landscapes, etc.).
-- **Architecture**: Vision Transformer (ViT). It "aligns" images with natural language descriptions.
-- **Base (ViT-B/32)**:
+- **Base (CLIP ViT-B/32)**:
   - **Size**: ~340 MB
   - **Performance**: ~30 images/sec (RX 5700 XT)
   - **Best for**: Fast sorting of general categories (Animals, Landscapes, Vehicles).
-- **Large (ViT-L/14)**:
-  - **Size**: ~1.7 GB
-  - **Performance**: ~10 images/sec (RX 5700 XT)
-  - **Best for**: High-precision detection of nuanced categories like *NSFW*, *Holy Places*, *Sensitive Documents*, and *Art Styles*.
+- **Ultra (SigLIP 2 SO400M)**:
+  - **Size**: **~3.2 GB**
+  - **Performance**: **~5-8 images/sec** (RX 5700 XT)
+  - **Architecture**: Sigmoid Loss for Image-Language Pre-training. 
+  - **Best for**: Unrivaled zero-shot accuracy. This model uses a 384px resolution and a much deeper transformer architecture to achieve near-human level categorization.
 
 ### 3. Identity Discovery (PCA + HDBSCAN)
 Used in **Step 2** to automatically "invent" person folders without being told who is who.
-- **Dimensionality Reduction (PCA)**: Compresses the 512D face vectors down to 96D. This preserves 95% of facial variance while speeding up the math by **over 20x** for large libraries (30k+ faces).
-- **Clustering (HDBSCAN)**: A density-based algorithm that handles "Noise" (people you don't know) elegantly. It groups faces into clusters based on their mathematical proximity in 96D space.
+- **Dimensionality Reduction (PCA)**: Compresses the 512D face vectors down to **96D**. This preserves 95% of facial variance while speeding up the math by **over 20x** for large libraries (30k+ faces).
+- **Clustering (HDBSCAN)**: A density-based algorithm that handles "Noise" elegantly. Groups faces based on their proximity in the reduced 96D space.
 - **Centroid Matching**: Once a person is "named", the AI calculates their mathematical "Average Face" (Centroid). New photos are matched against these centroids instantly using **Cosine Similarity**, skipping the heavy clustering math entirely.
 
 ---

@@ -1,5 +1,5 @@
 """
-Script 3: Semantic Image Classification using CLIP + DirectML
+Script 3: Semantic Image Classification using CLIP / SigLIP 2 + DirectML
 
 Classifies images that have NO detected faces into semantic categories
 using OpenAI CLIP (ViT-B/32) via ONNX Runtime with DirectML acceleration.
@@ -196,7 +196,7 @@ def setup_classifications_table(conn):
 
 
 def load_clip_model():
-    """Load the CLIP ONNX model with DirectML acceleration."""
+    """Load the CLIP or SigLIP ONNX model with DirectML acceleration."""
     try:
         from optimum.onnxruntime import ORTModelForZeroShotImageClassification
         from transformers import AutoProcessor
@@ -206,11 +206,14 @@ def load_clip_model():
         sys.exit(1)
 
     if not os.path.exists(CLIP_MODEL_DIR):
-        print(f"[ERROR] CLIP model not found at: {CLIP_MODEL_DIR}")
+        print(f"[ERROR] Classification model not found at: {CLIP_MODEL_DIR}")
         print("Run setup_clip_model.py first to export the model.")
         sys.exit(1)
 
-    print("  Loading CLIP model from ONNX...")
+    # Detect if this is a SigLIP model
+    is_siglip = "siglip" in CLIP_MODEL_DIR.lower()
+    model_type = "SigLIP 2" if is_siglip else "CLIP"
+    print(f"  Loading {model_type} model from ONNX...")
 
     # Determine the provider
     import onnxruntime as ort
@@ -228,19 +231,13 @@ def load_clip_model():
     )
     processor = AutoProcessor.from_pretrained(CLIP_MODEL_DIR)
 
-    return model, processor
+    return model, processor, is_siglip
 
 
 def build_candidate_labels():
     """
-    Build the list of candidate text labels for CLIP.
-    For ensemble accuracy, we average embeddings across multiple
-    prompts per category. But for the optimum pipeline, we
-    pass individual labels and then map back to categories.
+    Build the list of candidate text labels for CLIP/SigLIP.
     """
-    # For simplicity with the optimum API, we use one representative
-    # label per category and rely on CLIP's strong zero-shot ability.
-    # Using the first (most descriptive) prompt for each category.
     labels = []
     category_names = []
     for cat_name, prompts in CATEGORIES.items():
@@ -250,7 +247,7 @@ def build_candidate_labels():
     return labels, category_names
 
 
-def classify_with_ensemble(model, processor, image, categories_dict):
+def classify_with_ensemble(model, processor, image, categories_dict, is_siglip=False):
     """
     Classify an image using ensemble of multiple prompts per category.
     Returns list of (category_name, score) sorted by score descending.
@@ -262,7 +259,7 @@ def classify_with_ensemble(model, processor, image, categories_dict):
             all_labels.append(prompt)
             label_to_category[prompt] = cat_name
 
-    # Run CLIP inference
+    # Run inference
     inputs = processor(
         text=all_labels,
         images=image,
@@ -271,9 +268,18 @@ def classify_with_ensemble(model, processor, image, categories_dict):
     )
     outputs = model(**inputs)
 
-    # Get per-label probabilities
-    logits = outputs.logits_per_image[0]
-    probs = logits.softmax(dim=0).detach().numpy()
+    # SigLIP and CLIP handle logits differently
+    # SigLIP 2 uses sigmoid-based probs usually, but ORTModelForZeroShot
+    # might wrap it. Let's handle both.
+    if is_siglip:
+        # SigLIP probabilities are independent (multilabel style)
+        # but for classification we look at relative strength
+        logits = outputs.logits_per_image[0]
+        probs = logits.sigmoid().detach().numpy()
+    else:
+        # CLIP uses softmax across candidates
+        logits = outputs.logits_per_image[0]
+        probs = logits.softmax(dim=0).detach().numpy()
 
     # Aggregate probabilities by category (average across prompts)
     cat_scores = {}
@@ -289,10 +295,11 @@ def classify_with_ensemble(model, processor, image, categories_dict):
         avg_score = sum(scores) / len(scores)
         results.append((cat_name, avg_score))
 
-    # Normalize so scores sum to 1
-    total = sum(s for _, s in results)
-    if total > 0:
-        results = [(name, score / total) for name, score in results]
+    # Normalize if it's CLIP (SigLIP scores don't necessarily sum to 1)
+    if not is_siglip:
+        total = sum(s for _, s in results)
+        if total > 0:
+            results = [(name, score / total) for name, score in results]
 
     results.sort(key=lambda x: x[1], reverse=True)
     return results
@@ -300,15 +307,15 @@ def classify_with_ensemble(model, processor, image, categories_dict):
 
 def main():
     print("=" * 60)
-    print("  Script 3: Semantic Image Classification (CLIP + DirectML)")
+    print("  Script 3: Semantic Image Classification (CLIP/SigLIP + DirectML)")
     print("=" * 60)
 
     conn = sqlite3.connect(DB_PATH)
     setup_classifications_table(conn)
     cursor = conn.cursor()
 
-    # Load CLIP model
-    model, processor = load_clip_model()
+    # Load model
+    model, processor, is_siglip = load_clip_model()
 
     # Get images to classify
     if CLASSIFY_FACE_IMAGES:
@@ -354,7 +361,7 @@ def main():
             image = Image.open(file_path).convert("RGB")
 
             # Classify using ensemble of prompts
-            results = classify_with_ensemble(model, processor, image, CATEGORIES)
+            results = classify_with_ensemble(model, processor, image, CATEGORIES, is_siglip=is_siglip)
 
             # Determine category
             top_cat, top_score = results[0]

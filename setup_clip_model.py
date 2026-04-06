@@ -26,8 +26,9 @@ if os.path.exists(_cfg_path):
     CLIP_MODEL_SIZE = _cfg.get("clip_model_size", "base")
 
 if CLIP_MODEL_SIZE == "large":
-    MODEL_ID = "openai/clip-vit-large-patch14"
-    OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "clip-vit-large-patch14-onnx")
+    # Google SigLIP 2 SO400M - State-of-the-Art Vision-Language model
+    MODEL_ID = "google/siglip2-so400m-patch14-384"
+    OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "siglip2-so400m-patch14-384-onnx")
 else:
     MODEL_ID = "openai/clip-vit-base-patch32"
     OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "clip-vit-base-patch32-onnx")
