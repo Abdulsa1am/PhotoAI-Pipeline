@@ -62,10 +62,10 @@ class TestBuildArchiveUtilities(unittest.TestCase):
 
             self.assertTrue(ok)
             self.assertTrue(os.path.exists(dst))
-            self.assertIn(
-                os.path.normcase(os.path.abspath(src)),
-                self.mod.placed_source_paths,
-            )
+            normalized_set = {
+                os.path.normcase(os.path.abspath(p)) for p in self.mod.placed_source_paths
+            }
+            self.assertIn(os.path.normcase(os.path.abspath(src)), normalized_set)
 
     def test_place_file_auto_falls_back_to_copy_when_link_fails(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -125,10 +125,11 @@ class TestBuildArchiveUtilities(unittest.TestCase):
             conn.close()
 
             image_persons, image_paths = self.mod.load_cluster_labels(db_path)
+            generated_name = "Person_002_2faces"
 
             self.assertIn("Alice", image_persons[1])
-            self.assertIn("Person_002_2faces", image_persons[1])
-            self.assertIn("Person_002_2faces", image_persons[2])
+            self.assertIn(generated_name, image_persons[1])
+            self.assertIn(generated_name, image_persons[2])
             self.assertIn("Unknown_Faces", image_persons[3])
             self.assertEqual(image_paths[2], "/photos/b.jpg")
 
