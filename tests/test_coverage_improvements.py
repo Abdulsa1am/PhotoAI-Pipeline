@@ -22,16 +22,13 @@ def load_script_module(module_name, script_filename, stubs=None):
 
 
 class TestBuildArchiveUtilities(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
+    def setUp(self):
         numpy_stub = types.ModuleType("numpy")
-        cls.mod = load_script_module(
+        self.mod = load_script_module(
             "build_archive_module",
             "4_build_archive.py",
             stubs={"numpy": numpy_stub},
         )
-
-    def setUp(self):
         self._original_placed = set(self.mod.placed_source_paths)
 
     def tearDown(self):
@@ -137,11 +134,10 @@ class TestBuildArchiveUtilities(unittest.TestCase):
 
 
 class TestCompressUtilities(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
+    def setUp(self):
         pil_stub = types.ModuleType("PIL")
         pil_stub.Image = object()
-        cls.mod = load_script_module(
+        self.mod = load_script_module(
             "compress_module",
             "5_compress_images.py",
             stubs={"PIL": pil_stub},
