@@ -1,0 +1,14 @@
+# Virtual Environment
+env/
+
+# Python Cache files
+__pycache__/
+*.pyc
+*.pyo
+
+# Models and large files
+models/
+
+# OS generated files
+.DS_Store
+Thumbs.db
