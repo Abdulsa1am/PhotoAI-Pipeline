@@ -25,6 +25,20 @@ Use this file as the persistent continuity contract for future AI sessions.
 - Trace logging writes latest run to `logs/last_run.log` and archives recent runs in `logs/history/`.
 
 - Date: 2026-04-07
+- Area: Step 3 hybrid dual-model batching
+- Change: Replaced single-model `inference_batch_size` flow with hybrid two-pass classification: CLIP ViT-B/32 first-pass confirmation (`clip_batch_size`), SigLIP2 second-pass refinement (`siglip_batch_size`), controlled by `hybrid_mode` and `high_conf_threshold`.
+- Why: Improve total throughput while preserving quality by routing only ambiguous images to the larger SigLIP2 model.
+- Validation: Static checks clean after refactor; SQL selection/query and final summary output preserved.
+- Follow-up: Validate runtime throughput and ambiguous-pass ratio on production dataset, then tune `high_conf_threshold` and both batch sizes.
+
+- Date: 2026-04-07
+- Area: Step 3 true image batching
+- Change: Added configurable `inference_batch_size` for single-model batching in Script 3. Superseded later the same day by hybrid dual-model batching (`hybrid_mode`, `clip_batch_size`, `siglip_batch_size`).
+- Why: Initial throughput fix before introducing CLIP-first routing.
+- Validation: Static checks were clean at the time.
+- Follow-up: Use the newer hybrid settings; do not reintroduce `inference_batch_size` in active config.
+
+- Date: 2026-04-07
 - Area: Step 3 SigLIP2 throughput
 - Change: Added `ensemble_mode` toggle in Script 3; default `False` now uses primary-prompt-only classification (1 prompt/category) while `True` keeps full 4-prompt ensemble.
 - Why: Reduce per-image text batch from 84 prompts to 21 prompts for large SigLIP2 speedup on DirectML.
