@@ -67,3 +67,28 @@ unreliable. Before running the pipeline again, the user must:
 3. Rerun Script 2 (face clustering) with the new HDBSCAN parameters
 Do not skip this step. Running Script 2 on top of the old database
 will not fix the wrong-person-in-folder problem.
+
+- Date: 2026-04-07
+- Area: Step 2 clustering dimensionality
+- Change: Removed Phase 2 PCA down-projection branch and now always cluster with full 512D normalized embeddings.
+- Why: Preserve identity separation signal in high-dimensional embedding space and avoid projection-induced merges.
+- Validation: Static analysis clean for Step 2 and full test suite passes (14/14).
+- Follow-up: Monitor Phase 2 runtime on largest batches and tune scheduling if needed.
+
+## Post-Accuracy-Fix Action Required
+
+Bugs 1–5 have been fixed. The existing database photo_catalog.db
+was built with the wrong HDBSCAN metric (euclidean), wrong cluster
+selection method (eom), and 96D PCA-compressed embeddings. All
+existing cluster assignments and centroids are unreliable.
+
+Before running the pipeline again you must:
+1. Delete or rename photo_catalog.db
+2. Rerun Script 1 (face extraction) — this will now apply the
+	min_face_area_px=1600 filter and only store quality faces
+3. Rerun Script 2 (face clustering) — this will now cluster on
+	full 512D cosine space with leaf selection
+
+Do not skip the database reset. Running Script 2 on top of the
+existing database will not fix the wrong-person-in-folder problem
+because the contaminated centroids will persist.

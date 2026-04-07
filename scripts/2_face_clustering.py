@@ -30,7 +30,6 @@ from embedding_codec import encode_embedding, decode_embedding
 try:
     import hdbscan
     from sklearn.preprocessing import normalize
-    from sklearn.decomposition import PCA
     from sklearn.metrics.pairwise import cosine_similarity
 except ImportError:
     print("[ERROR] hdbscan/scikit-learn not installed")
@@ -41,6 +40,9 @@ except ImportError:
 DB_PATH = r"D:\PhotoAI\photo_catalog.db"
 MIN_CLUSTER_SIZE = 8
 MIN_SAMPLES = 3
+DET_SCORE_MIN_CLUSTER = 0.70
+HDBSCAN_METRIC = "cosine"
+HDBSCAN_CLUSTER_SELECTION = "leaf"
 HIGH_THRESHOLD = 0.72
 LOW_THRESHOLD = 0.55
 MARGIN_THRESHOLD = 0.08
@@ -56,6 +58,13 @@ if os.path.exists(_cfg_path):
     DB_PATH          = _cfg.get("db_path", DB_PATH)
     MIN_CLUSTER_SIZE = int(_cfg.get("min_cluster_size", MIN_CLUSTER_SIZE))
     MIN_SAMPLES      = int(_cfg.get("min_samples", MIN_SAMPLES))
+    DET_SCORE_MIN_CLUSTER = float(
+        _cfg.get("det_score_min_cluster", DET_SCORE_MIN_CLUSTER)
+    )
+    HDBSCAN_METRIC = _cfg.get("hdbscan_metric", "cosine")
+    HDBSCAN_CLUSTER_SELECTION = _cfg.get(
+        "hdbscan_cluster_selection_method", "leaf"
+    )
     _assign_cfg = _cfg.get("assignment", {})
     HIGH_THRESHOLD   = float(_assign_cfg.get("high_threshold", _cfg.get("high_threshold", HIGH_THRESHOLD)))
     LOW_THRESHOLD    = float(_assign_cfg.get("low_threshold", _cfg.get("low_threshold", LOW_THRESHOLD)))
@@ -257,6 +266,8 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
 
     cursor.execute("PRAGMA table_info(faces)")
     face_cols = {row[1] for row in cursor.fetchall()}
+    if "det_score" not in face_cols:
+        cursor.execute("ALTER TABLE faces ADD COLUMN det_score REAL")
     if "person_id" not in face_cols:
         cursor.execute("ALTER TABLE faces ADD COLUMN person_id INTEGER")
     if "assignment_status" not in face_cols:
@@ -396,8 +407,10 @@ def main():
         WHERE (person_id IS NULL OR person_id = -1)
           AND (assignment_status IS NULL
                OR (assignment_status != 'REVIEW'
-                   AND assignment_status != 'ESCALATED'))
-        """
+                                     AND assignment_status != 'ESCALATED'))
+                    AND (det_score IS NULL OR det_score >= ?)
+                """,
+                (DET_SCORE_MIN_CLUSTER,),
     )
     unassigned_rows = cursor.fetchall()
 
@@ -498,20 +511,14 @@ def main():
         if new_identity_idx:
             leftover_norm = unassigned_norm[new_identity_idx]
 
-        # Dimensionality Reduction
-            if len(leftover_norm) > 1000:
-                print("    -> Reducing dimensionality (PCA 512D -> 96D)...")
-                pca = PCA(n_components=min(96, len(leftover_norm)))
-                cluster_data = pca.fit_transform(leftover_norm)
-            else:
-                cluster_data = leftover_norm
+            cluster_data = leftover_norm  # always use full 512D
             
             start = time.time()
             clusterer = hdbscan.HDBSCAN(
                 min_cluster_size=MIN_CLUSTER_SIZE,
                 min_samples=MIN_SAMPLES,
-                metric="euclidean",
-                cluster_selection_method='eom',
+                metric=HDBSCAN_METRIC,
+                cluster_selection_method=HDBSCAN_CLUSTER_SELECTION,
                 core_dist_n_jobs=-1
             )
             labels = clusterer.fit_predict(cluster_data)

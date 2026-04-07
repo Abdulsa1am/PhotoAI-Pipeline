@@ -138,10 +138,11 @@ class TestCompressUtilities(unittest.TestCase):
     def setUp(self):
         pil_stub = types.ModuleType("PIL")
         pil_stub.Image = object()
+        pillow_avif_stub = types.ModuleType("pillow_avif")
         self.mod = load_script_module(
             "compress_module",
             os.path.join("scripts", "5_compress_images.py"),
-            stubs={"PIL": pil_stub},
+            stubs={"PIL": pil_stub, "pillow_avif": pillow_avif_stub},
         )
 
     def test_find_images_recursively_filters_supported_extensions(self):

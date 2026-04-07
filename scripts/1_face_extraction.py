@@ -34,6 +34,7 @@ DB_PATH    = r"D:\PhotoAI\photo_catalog.db"
 VALID_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp'}
 DET_SIZE = (640, 640)
 DET_THRESH = 0.65
+MIN_FACE_AREA_PX = 1600
 MAX_DIM = 1920
 BATCH_SIZE = 50
 
@@ -48,6 +49,7 @@ if os.path.exists(_cfg_path):
     _ds        = _cfg.get("det_size", DET_SIZE[0] if isinstance(DET_SIZE, tuple) else DET_SIZE)
     DET_SIZE   = (int(_ds), int(_ds))
     DET_THRESH = float(_cfg.get("det_thresh", DET_THRESH))
+    MIN_FACE_AREA_PX = int(_cfg.get("min_face_area_px", MIN_FACE_AREA_PX))
     MAX_DIM    = int(_cfg.get("max_dim", MAX_DIM))
 # =======================================
 
@@ -229,6 +231,7 @@ def process_images():
     print(f"    DB path    : {DB_PATH}")
     print(f"    Det size   : {DET_SIZE}")
     print(f"    Det thresh : {DET_THRESH}")
+    print(f"    Min face area  : {MIN_FACE_AREA_PX}px²")
     print(f"    Max dim    : {MAX_DIM}")
 
     if not os.path.isdir(MASTER_DIR):
@@ -341,6 +344,14 @@ def process_images():
 
             # Insert each face encoding
                 for face in faces:
+                    bbox = face.bbox  # [x1, y1, x2, y2]
+                    face_w = float(bbox[2]) - float(bbox[0])
+                    face_h = float(bbox[3]) - float(bbox[1])
+                    face_area = face_w * face_h
+
+                    if face_area < MIN_FACE_AREA_PX:
+                        continue
+
                     encoding_bytes = pickle.dumps(face.embedding)
                     bbox_str = str(face.bbox.tolist())
                     det_score = float(face.det_score)
