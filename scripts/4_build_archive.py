@@ -13,7 +13,7 @@ Prerequisites:
     - Script 3 is optional (if skipped, non-face images go to Uncategorized)
 
 Usage:
-    python 4_build_archive.py
+    python scripts/4_build_archive.py
 """
 
 import os
@@ -35,7 +35,8 @@ MIN_CLUSTER_SIZE = 4
 MERGE_THRESHOLD  = 0.40
 
 # ---- Load overrides from pipeline_config.json (written by GUI) ----
-_cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pipeline_config.json")
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_cfg_path = os.path.join(PROJECT_ROOT, "pipeline_config.json")
 if os.path.exists(_cfg_path):
     with open(_cfg_path, 'r', encoding='utf-8') as _f:
         _cfg = json.load(_f)

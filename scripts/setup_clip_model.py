@@ -1,7 +1,7 @@
 """
 setup_clip_model.py — One-time CLIP model export to ONNX format.
 
-Run this ONCE before using 3_classify_images.py.
+Run this ONCE before using scripts/3_classify_images.py.
 It downloads the CLIP ViT-B/32 model from Hugging Face and exports it
 to ONNX format for use with DirectML (AMD GPU acceleration).
 
@@ -17,8 +17,10 @@ import sys
 import subprocess
 import json
 
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 # ---- Load overrides from pipeline_config.json ----
-_cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pipeline_config.json")
+_cfg_path = os.path.join(PROJECT_ROOT, "pipeline_config.json")
 CLIP_MODEL_SIZE = "base"
 if os.path.exists(_cfg_path):
     with open(_cfg_path, 'r', encoding='utf-8') as _f:
@@ -28,10 +30,10 @@ if os.path.exists(_cfg_path):
 if CLIP_MODEL_SIZE == "large":
     # Google SigLIP 2 SO400M - State-of-the-Art Vision-Language model
     MODEL_ID = "google/siglip2-so400m-patch14-384"
-    OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "siglip2-so400m-patch14-384-onnx")
+    OUTPUT_DIR = os.path.join(PROJECT_ROOT, "models", "siglip2-so400m-patch14-384-onnx")
 else:
     MODEL_ID = "openai/clip-vit-base-patch32"
-    OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "clip-vit-base-patch32-onnx")
+    OUTPUT_DIR = os.path.join(PROJECT_ROOT, "models", "clip-vit-base-patch32-onnx")
 
 def export_model():
     """Export CLIP to ONNX using optimum-cli."""
@@ -106,7 +108,7 @@ def verify_model():
         print("      Install: pip install onnxruntime-directml")
 
     print("\n" + "=" * 60)
-    print("  Setup complete! You can now run 3_classify_images.py")
+    print("  Setup complete! You can now run scripts/3_classify_images.py")
     print("=" * 60)
 
 

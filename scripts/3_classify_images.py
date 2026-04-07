@@ -8,11 +8,11 @@ CLIP performs "zero-shot" classification — categories are defined as plain
 text strings. You can add/remove/modify categories without retraining.
 
 Prerequisites:
-    1. Run setup_clip_model.py once to export the ONNX model
+    1. Run scripts/setup_clip_model.py once to export the ONNX model
     2. pip install onnxruntime-directml transformers Pillow numpy
 
 Usage:
-    python 3_classify_images.py
+    python scripts/3_classify_images.py
 """
 
 import os
@@ -24,15 +24,16 @@ import time
 from PIL import Image
 
 # ============ CONFIGURATION ============
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = r"D:\PhotoAI\photo_catalog.db"
-CLIP_MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+CLIP_MODEL_DIR = os.path.join(PROJECT_ROOT,
                               "models", "clip-vit-base-patch32-onnx")
 CONFIDENCE_THRESHOLD = 0.18
 BATCH_SIZE = 50
 CLASSIFY_FACE_IMAGES = False
 
 # ---- Load overrides from pipeline_config.json (written by GUI) ----
-_cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pipeline_config.json")
+_cfg_path = os.path.join(PROJECT_ROOT, "pipeline_config.json")
 if os.path.exists(_cfg_path):
     with open(_cfg_path, 'r', encoding='utf-8') as _f:
         _cfg = json.load(_f)
@@ -40,7 +41,7 @@ if os.path.exists(_cfg_path):
     CONFIDENCE_THRESHOLD = float(_cfg.get("confidence_threshold", CONFIDENCE_THRESHOLD))
     clip_model_size      = _cfg.get("clip_model_size", "base")
     if clip_model_size == "large":
-        CLIP_MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+        CLIP_MODEL_DIR = os.path.join(PROJECT_ROOT,
                                       "models", "clip-vit-large-patch14-onnx")
 
 # ---- CATEGORY DEFINITIONS ----
@@ -207,7 +208,7 @@ def load_clip_model():
 
     if not os.path.exists(CLIP_MODEL_DIR):
         print(f"[ERROR] Classification model not found at: {CLIP_MODEL_DIR}")
-        print("Run setup_clip_model.py first to export the model.")
+        print("Run scripts/setup_clip_model.py first to export the model.")
         sys.exit(1)
 
     # Detect if this is a SigLIP model

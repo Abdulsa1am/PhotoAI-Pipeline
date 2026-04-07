@@ -1,14 +1,35 @@
-# Virtual Environment
+# Virtual environment
 env/
+.venv/
 
-# Python Cache files
+# Python caches and tooling
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# Models and large files
+# Machine-specific IDE state
+.vscode/
+.idea/
+
+# Runtime and generated data
+photo_catalog.db
+debug/*.db
+pipeline_config.json
+logs/*.log
+logs/*.txt
+logs/*.jsonl
+logs/history/*.log
+
+# Keep folder structure for logs/history in git
+!logs/.gitkeep
+!logs/history/.gitkeep
+
+# Models and large binaries
 models/
 
-# OS generated files
+# OS-generated files
 .DS_Store
 Thumbs.db

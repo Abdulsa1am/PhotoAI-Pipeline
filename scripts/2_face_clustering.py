@@ -11,7 +11,6 @@ This script functions incrementally with a three-layer confidence gate:
 import os
 import sys
 import sqlite3
-import pickle
 import json
 import time
 import logging
@@ -21,6 +20,12 @@ from pathlib import Path
 from collections import deque
 from typing import List, Optional
 import numpy as np
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from embedding_codec import encode_embedding, decode_embedding
 
 try:
     import hdbscan
@@ -44,7 +49,7 @@ REVIEW_MAX_SIZE = 5000
 REVIEW_MAX_AGE_BATCHES = 10
 
 # ---- Load overrides from pipeline_config.json ----
-_cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pipeline_config.json")
+_cfg_path = os.path.join(PROJECT_ROOT, "pipeline_config.json")
 if os.path.exists(_cfg_path):
     with open(_cfg_path, 'r', encoding='utf-8') as _f:
         _cfg = json.load(_f)
@@ -285,10 +290,13 @@ def _load_identities(cursor: sqlite3.Cursor) -> List[IdentityRecord]:
     rows = cursor.fetchall()
     identities = []
     for row in rows:
+        centroid, upgraded_blob, was_upgraded = decode_embedding(row[1], return_upgraded_blob=True)
+        if was_upgraded:
+            cursor.execute("UPDATE people SET centroid = ? WHERE id = ?", (upgraded_blob, row[0]))
         identities.append(
             IdentityRecord(
                 person_id=row[0],
-                centroid=normalize(np.array([pickle.loads(row[1])]), norm='l2')[0],
+                centroid=normalize(np.array([centroid]), norm='l2')[0],
                 n_confirmed=int(row[2]),
                 baseline_cohesion=float(row[3]),
                 current_cohesion=float(row[4]),
@@ -307,7 +315,7 @@ def _persist_identity(cursor: sqlite3.Cursor, identity: IdentityRecord) -> None:
         WHERE id = ?
         """,
         (
-            pickle.dumps(identity.centroid),
+            encode_embedding(identity.centroid),
             identity.n_confirmed,
             identity.baseline_cohesion,
             identity.current_cohesion,
@@ -332,7 +340,7 @@ def _upsert_review(cursor: sqlite3.Cursor, face_id: int, encoding: np.ndarray, r
         """,
         (
             face_id,
-            pickle.dumps(encoding),
+            encode_embedding(encoding),
             json.dumps(result.candidate_ids),
             json.dumps(result.candidate_scores),
             result.margin,
@@ -387,7 +395,16 @@ def main():
         return
 
     unassigned_ids = [r[0] for r in unassigned_rows]
-    unassigned_encodings = np.array([pickle.loads(r[1]) for r in unassigned_rows])
+    upgraded_unassigned = []
+    unassigned_encodings = []
+    for r in unassigned_rows:
+        emb, upgraded_blob, was_upgraded = decode_embedding(r[1], return_upgraded_blob=True)
+        unassigned_encodings.append(emb)
+        if was_upgraded:
+            upgraded_unassigned.append((upgraded_blob, r[0]))
+    if upgraded_unassigned:
+        cursor.executemany("UPDATE faces SET encoding = ? WHERE id = ?", upgraded_unassigned)
+    unassigned_encodings = np.array(unassigned_encodings)
     unassigned_norm = normalize(unassigned_encodings, norm='l2')
 
     print(f"  Loaded {len(unassigned_rows)} unassigned/orphan faces.")
@@ -492,7 +509,7 @@ def main():
                 centroid /= np.linalg.norm(centroid)
 
                 now_iso = datetime.utcnow().isoformat()
-                c_blob = pickle.dumps(centroid)
+                c_blob = encode_embedding(centroid)
                 cluster_size = int(np.sum(mask))
                 cursor.execute(
                     """
@@ -551,7 +568,10 @@ def main():
 
     for face_id, enc_blob, enqueued_batch in queued_rows:
         age = current_batch_counter - int(enqueued_batch)
-        embedding = normalize(np.array([pickle.loads(enc_blob)]), norm='l2')[0]
+        embedding, upgraded_blob, was_upgraded = decode_embedding(enc_blob, return_upgraded_blob=True)
+        if was_upgraded:
+            cursor.execute("UPDATE review_queue SET encoding = ? WHERE face_id = ?", (upgraded_blob, face_id))
+        embedding = normalize(np.array([embedding]), norm='l2')[0]
 
         if age > REVIEW_MAX_AGE_BATCHES:
             cursor.execute(

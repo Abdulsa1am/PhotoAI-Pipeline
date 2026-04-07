@@ -11,7 +11,7 @@ Supports:
   - PNG:  Lossless compression
 
 Usage:
-    python 5_compress_images.py
+    python scripts/5_compress_images.py
 """
 
 import os
@@ -41,7 +41,8 @@ SKIP_EXISTING   = True                       # Skip already-compressed files
 BATCH_SIZE      = 25                         # Progress report interval
 
 # ---- Load overrides from pipeline_config.json ----
-_cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pipeline_config.json")
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_cfg_path = os.path.join(PROJECT_ROOT, "pipeline_config.json")
 if os.path.exists(_cfg_path):
     with open(_cfg_path, 'r', encoding='utf-8') as _f:
         _cfg = json.load(_f)

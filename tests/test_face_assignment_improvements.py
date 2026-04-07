@@ -19,7 +19,7 @@ def load_script_module(module_name, script_filename):
 class TestConfidenceGatedAssigner(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.mod = load_script_module("cluster_module", "2_face_clustering.py")
+        cls.mod = load_script_module("cluster_module", os.path.join("scripts", "2_face_clustering.py"))
 
     def test_high_confidence_assign(self):
         assigner = self.mod.ConfidenceGatedAssigner(
@@ -68,7 +68,7 @@ class TestConfidenceGatedAssigner(unittest.TestCase):
 class TestCentroidManager(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.mod = load_script_module("cluster_module_cm", "2_face_clustering.py")
+        cls.mod = load_script_module("cluster_module_cm", os.path.join("scripts", "2_face_clustering.py"))
 
     def test_centroid_not_updated_on_review(self):
         manager = self.mod.CentroidManager(0.72, 0.08)

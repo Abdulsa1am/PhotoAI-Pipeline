@@ -26,7 +26,7 @@ class TestBuildArchiveUtilities(unittest.TestCase):
         numpy_stub = types.ModuleType("numpy")
         self.mod = load_script_module(
             "build_archive_module",
-            "4_build_archive.py",
+            os.path.join("scripts", "4_build_archive.py"),
             stubs={"numpy": numpy_stub},
         )
         self._original_placed = set(self.mod.placed_source_paths)
@@ -140,7 +140,7 @@ class TestCompressUtilities(unittest.TestCase):
         pil_stub.Image = object()
         self.mod = load_script_module(
             "compress_module",
-            "5_compress_images.py",
+            os.path.join("scripts", "5_compress_images.py"),
             stubs={"PIL": pil_stub},
         )
 

@@ -1,4 +1,4 @@
-# 📸 PhotoAI — Comprehensive Image Archiving Pipeline
+﻿# 📸 PhotoAI — Comprehensive Image Archiving Pipeline
 
 A fully offline, automated photo organization pipeline for Windows that sorts massive photo libraries by **face identity** and **semantic content**.
 
@@ -68,6 +68,7 @@ Double-click `run.bat` to launch.
 - [docs/PIPELINE_FLOW.md](docs/PIPELINE_FLOW.md) — Complete phase flow, dependencies, and run modes
 - [docs/STABILITY_GUIDE.md](docs/STABILITY_GUIDE.md) — Large-run stability and DirectML troubleshooting
 - [docs/CONFIG_REFERENCE.md](docs/CONFIG_REFERENCE.md) — Static vs dynamic settings and reset rules
+- [docs/REPOSITORY_LAYOUT.md](docs/REPOSITORY_LAYOUT.md) — Project structure and Git hygiene conventions
 - [docs/PHASE_DETAILS/00-setup-clip.md](docs/PHASE_DETAILS/00-setup-clip.md)
 - [docs/PHASE_DETAILS/01-face-extraction.md](docs/PHASE_DETAILS/01-face-extraction.md)
 - [docs/PHASE_DETAILS/02-face-clustering.md](docs/PHASE_DETAILS/02-face-clustering.md)
@@ -188,7 +189,7 @@ cd d:\PhotoAI
 .\env\Scripts\activate
 
 # 1. Export CLIP model to ONNX format (~5 min, downloads ~600MB once)
-python setup_clip_model.py
+python scripts/setup_clip_model.py
 
 # 2. Launch the GUI and run the full pipeline from there
 python app.py
@@ -207,11 +208,12 @@ In the GUI:
 | File | Purpose | Accelerator |
 |---|---|---|
 | `app.py` | **GUI — start here** | — |
-| `setup_clip_model.py` | One-time CLIP → ONNX model export | — |
-| `1_face_extraction.py` | Face detection + embedding extraction | RX 5700 XT (DirectML) |
-| `2_face_clustering.py` | HDBSCAN clustering + centroid merge | Ryzen 7 (all cores) |
-| `3_classify_images.py` | CLIP zero-shot semantic classification | RX 5700 XT (DirectML) |
-| `4_build_archive.py` | Final archive assembly (works even if Step 2/3 were skipped) | SSD I/O |
+| `scripts/setup_clip_model.py` | One-time CLIP → ONNX model export | — |
+| `scripts/1_face_extraction.py` | Face detection + embedding extraction | RX 5700 XT (DirectML) |
+| `scripts/2_face_clustering.py` | HDBSCAN clustering + centroid merge | Ryzen 7 (all cores) |
+| `scripts/3_classify_images.py` | CLIP zero-shot semantic classification | RX 5700 XT (DirectML) |
+| `scripts/4_build_archive.py` | Final archive assembly (works even if Step 2/3 were skipped) | SSD I/O |
+| `scripts/5_compress_images.py` | GPU-accelerated image compression | RX 5700 XT (DirectML) |
 | `pipeline_config.json` | Config saved by GUI (auto-created) | — |
 | `photo_catalog.db` | SQLite database (auto-created) | — |
 
@@ -254,6 +256,8 @@ Use `last_run.log` for quick debugging and `logs\history\` for comparing recent 
 
 All settings can be changed in the GUI. They are saved to `pipeline_config.json` and applied automatically. 
 
+For a fresh machine setup, start from `pipeline_config.example.json` and let the GUI write your local `pipeline_config.json`.
+
 > 💡 **Dynamic vs Static Settings:**
 > - **Dynamic settings:** `Min Cluster`, `Merge Thresh`, and `Confidence` are evaluated dynamically during **Step 4 (Build Archive)**. If you change these, you DO NOT need to reset the database. Just click "Run Full Pipeline" again and the AI will reorganize your archive differently in under 2 seconds.
 > - **Static settings:** `Det Size` and `Det Thresh` control the raw data extracted from pixels into the database. If you change these, you **MUST** click "Reset Database" for them to take effect, otherwise the AI will skip your photos thinking they are already processed.
@@ -285,7 +289,7 @@ All settings can be changed in the GUI. They are saved to `pipeline_config.json`
 
 ## 🧠 Semantic Categories
 
-Categories are defined as plain-text CLIP prompts in `3_classify_images.py`. Each uses 4 ensemble prompts for accuracy.
+Categories are defined as plain-text CLIP prompts in `scripts/3_classify_images.py`. Each uses 4 ensemble prompts for accuracy.
 
 | # | Category | Examples |
 |---|---|---|
@@ -313,7 +317,7 @@ Categories are defined as plain-text CLIP prompts in `3_classify_images.py`. Eac
 | 22 | Other | Low-confidence catch-all |
 | 23 | Uncategorized | Not yet processed |
 
-**Adding custom categories:** Edit the `CATEGORIES` dict in `3_classify_images.py`:
+**Adding custom categories:** Edit the `CATEGORIES` dict in `scripts/3_classify_images.py`:
 ```python
 CATEGORIES["Wedding"] = [
     "a wedding ceremony",

@@ -22,6 +22,7 @@ except ImportError:
 import glob
 import random
 import sqlite3
+from collections import deque
 try:
     from PIL import Image, ImageTk
     PIL_OK = True
@@ -65,12 +66,12 @@ FONT_NUM    = ("Segoe UI", 20, "bold")
 FONT_LOG    = ("Cascadia Code", 9)
 
 SCRIPTS = {
-    "setup":    ("0", "Setup CLIP",       "Export CLIP model to ONNX (one-time)",     "setup_clip_model.py"),
-    "extract":  ("1", "Face Extraction",  "Detect faces & extract ArcFace embeddings","1_face_extraction.py"),
-    "cluster":  ("2", "Face Clustering",  "HDBSCAN clustering + centroid merge",      "2_face_clustering.py"),
-    "classify": ("3", "Classify Images",  "CLIP zero-shot semantic classification",   "3_classify_images.py"),
-    "archive":  ("4", "Build Archive",    "Assemble final organized directory",       "4_build_archive.py"),
-    "compress": ("5", "Compress Images", "GPU-accelerated image compression",        "5_compress_images.py"),
+    "setup":    ("0", "Setup CLIP",       "Export CLIP model to ONNX (one-time)",     os.path.join("scripts", "setup_clip_model.py")),
+    "extract":  ("1", "Face Extraction",  "Detect faces & extract ArcFace embeddings", os.path.join("scripts", "1_face_extraction.py")),
+    "cluster":  ("2", "Face Clustering",  "HDBSCAN clustering + centroid merge",      os.path.join("scripts", "2_face_clustering.py")),
+    "classify": ("3", "Classify Images",  "CLIP zero-shot semantic classification",   os.path.join("scripts", "3_classify_images.py")),
+    "archive":  ("4", "Build Archive",    "Assemble final organized directory",       os.path.join("scripts", "4_build_archive.py")),
+    "compress": ("5", "Compress Images",  "GPU-accelerated image compression",        os.path.join("scripts", "5_compress_images.py")),
 }
 PIPELINE_ORDER = ["setup", "extract", "cluster", "classify", "archive"]
 
@@ -144,8 +145,8 @@ class SystemMonitor:
         self.cpu_avg    = 0.0
         self.gpu_cur    = -1.0
         self.gpu_avg    = -1.0
-        self._cpu_hist  = []
-        self._gpu_hist  = []
+        self._cpu_hist  = deque(maxlen=300)
+        self._gpu_hist  = deque(maxlen=300)
         self._running   = False
         self._thread    = None
 
@@ -1002,7 +1003,7 @@ class PhotoAIApp:
             return
         self._save_config()
 
-        script_path = os.path.join(SCRIPT_DIR, "5_compress_images.py")
+        script_path = os.path.join(SCRIPT_DIR, "scripts", "5_compress_images.py")
 
         self.current_key = "compress"
         self.running = True
