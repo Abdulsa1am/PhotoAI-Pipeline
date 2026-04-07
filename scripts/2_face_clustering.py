@@ -39,8 +39,8 @@ except ImportError:
 
 # ============ CONFIGURATION ============
 DB_PATH = r"D:\PhotoAI\photo_catalog.db"
-MIN_CLUSTER_SIZE = 4
-MIN_SAMPLES = 2
+MIN_CLUSTER_SIZE = 8
+MIN_SAMPLES = 3
 HIGH_THRESHOLD = 0.72
 LOW_THRESHOLD = 0.55
 MARGIN_THRESHOLD = 0.08
@@ -55,9 +55,19 @@ if os.path.exists(_cfg_path):
         _cfg = json.load(_f)
     DB_PATH          = _cfg.get("db_path", DB_PATH)
     MIN_CLUSTER_SIZE = int(_cfg.get("min_cluster_size", MIN_CLUSTER_SIZE))
-    HIGH_THRESHOLD   = float(_cfg.get("high_threshold", HIGH_THRESHOLD))
-    LOW_THRESHOLD    = float(_cfg.get("low_threshold", LOW_THRESHOLD))
-    MARGIN_THRESHOLD = float(_cfg.get("margin_threshold", MARGIN_THRESHOLD))
+    MIN_SAMPLES      = int(_cfg.get("min_samples", MIN_SAMPLES))
+    _assign_cfg = _cfg.get("assignment", {})
+    HIGH_THRESHOLD   = float(_assign_cfg.get("high_threshold", _cfg.get("high_threshold", HIGH_THRESHOLD)))
+    LOW_THRESHOLD    = float(_assign_cfg.get("low_threshold", _cfg.get("low_threshold", LOW_THRESHOLD)))
+    MARGIN_THRESHOLD = float(_assign_cfg.get("margin_threshold", _cfg.get("margin_threshold", MARGIN_THRESHOLD)))
+
+    # Read calibration flag and warn if not calibrated
+    _calibrated = _assign_cfg.get("calibrated", _cfg.get("calibrated", False))
+    if not _calibrated:
+        print("[WARNING] Assignment thresholds are not calibrated on labeled data.")
+        print("[WARNING] Running with default thresholds. False merge rate is unknown.")
+        print("[WARNING] Run threshold calibration and set calibrated=true in config.")
+
     AUDIT_LOG_PATH   = _cfg.get("assignment_audit_log_path", AUDIT_LOG_PATH)
     REVIEW_MAX_SIZE  = int(_cfg.get("review_max_size", REVIEW_MAX_SIZE))
     REVIEW_MAX_AGE_BATCHES = int(_cfg.get("review_max_age_batches", REVIEW_MAX_AGE_BATCHES))
@@ -381,13 +391,19 @@ def main():
 
     cursor.execute(
         """
-        SELECT id, encoding
+        SELECT id, encoding, assignment_status
         FROM faces
         WHERE (person_id IS NULL OR person_id = -1)
-          AND (assignment_status IS NULL OR assignment_status != 'REVIEW')
+          AND (assignment_status IS NULL
+               OR (assignment_status != 'REVIEW'
+                   AND assignment_status != 'ESCALATED'))
         """
     )
     unassigned_rows = cursor.fetchall()
+
+    escalated_in_batch = sum(1 for _, _, status in unassigned_rows if status == 'ESCALATED')
+    assert escalated_in_batch == 0, "ESCALATED faces leaked into unassigned loader batch"
+    print("  Safety check: 0 ESCALATED faces in unassigned batch.")
 
     if not unassigned_rows:
         print("  ✓ No new faces to cluster.")
@@ -575,7 +591,7 @@ def main():
 
         if age > REVIEW_MAX_AGE_BATCHES:
             cursor.execute(
-                "UPDATE faces SET person_id = -1, assignment_status = 'NEW_IDENTITY' WHERE id = ?",
+                "UPDATE faces SET person_id = -1, assignment_status = 'ESCALATED' WHERE id = ?",
                 (face_id,),
             )
             cursor.execute("DELETE FROM review_queue WHERE face_id = ?", (face_id,))

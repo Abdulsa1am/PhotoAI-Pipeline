@@ -33,7 +33,7 @@ DB_PATH    = r"D:\PhotoAI\photo_catalog.db"
 
 VALID_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp'}
 DET_SIZE = (640, 640)
-DET_THRESH = 0.5
+DET_THRESH = 0.65
 MAX_DIM = 1920
 BATCH_SIZE = 50
 

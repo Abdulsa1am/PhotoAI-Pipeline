@@ -56,3 +56,14 @@ Use this file as the persistent continuity contract for future AI sessions.
 
 - Confirm trace-history retention after 11+ runs in GUI execution.
 - Keep static-vs-dynamic setting guidance aligned with runtime behavior.
+
+## Post-Fix Action Required
+
+The database photo_catalog.db was built with det_thresh=0.5 and
+min_cluster_size=4. All centroids and cluster assignments in it are
+unreliable. Before running the pipeline again, the user must:
+1. Delete or rename photo_catalog.db
+2. Rerun Script 1 (face extraction) with the new det_thresh=0.65
+3. Rerun Script 2 (face clustering) with the new HDBSCAN parameters
+Do not skip this step. Running Script 2 on top of the old database
+will not fix the wrong-person-in-folder problem.
