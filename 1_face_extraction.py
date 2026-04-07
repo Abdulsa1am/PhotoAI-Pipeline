@@ -60,7 +60,12 @@ def setup_database():
         CREATE TABLE IF NOT EXISTS people (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             custom_name TEXT,
-            centroid BLOB
+            centroid BLOB,
+            n_confirmed INTEGER DEFAULT 0,
+            baseline_cohesion REAL DEFAULT 1.0,
+            current_cohesion REAL DEFAULT 1.0,
+            created_at TEXT,
+            last_updated TEXT
         )
     ''')
     cursor.execute('''
@@ -101,6 +106,32 @@ def setup_database():
             pass
         try:
             cursor.execute("ALTER TABLE faces ADD COLUMN person_id INTEGER")
+        except sqlite3.OperationalError:
+            pass
+
+    # Ensure assignment/review metadata columns exist
+    for alter_sql in [
+        "ALTER TABLE faces ADD COLUMN assignment_status TEXT",
+        "ALTER TABLE faces ADD COLUMN review_candidate_ids TEXT",
+        "ALTER TABLE faces ADD COLUMN review_candidate_scores TEXT",
+        "ALTER TABLE faces ADD COLUMN review_margin REAL",
+        "ALTER TABLE faces ADD COLUMN review_best_similarity REAL",
+    ]:
+        try:
+            cursor.execute(alter_sql)
+        except sqlite3.OperationalError:
+            pass
+
+    # Ensure identity stability tracking columns exist on older DBs
+    for alter_sql in [
+        "ALTER TABLE people ADD COLUMN n_confirmed INTEGER DEFAULT 0",
+        "ALTER TABLE people ADD COLUMN baseline_cohesion REAL DEFAULT 1.0",
+        "ALTER TABLE people ADD COLUMN current_cohesion REAL DEFAULT 1.0",
+        "ALTER TABLE people ADD COLUMN created_at TEXT",
+        "ALTER TABLE people ADD COLUMN last_updated TEXT",
+    ]:
+        try:
+            cursor.execute(alter_sql)
         except sqlite3.OperationalError:
             pass
 

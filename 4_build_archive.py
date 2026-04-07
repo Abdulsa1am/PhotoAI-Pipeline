@@ -118,7 +118,7 @@ def load_cluster_labels(db_path):
     """
     Load face cluster assignments directly from the persistent database.
     Returns:
-      image_persons: dict of image_id -> set of resolved string names (e.g., 'Mom', 'Person_001_5faces', 'Unknown_Faces')
+    image_persons: dict of image_id -> set of resolved string names (e.g., 'Mom', 'Person_001_5faces', 'Unknown_Faces', 'Pending_Review')
       image_paths: dict of image_id -> original file_path
     """
     try:
@@ -129,14 +129,27 @@ def load_cluster_labels(db_path):
         cursor.execute("SELECT person_id, COUNT(*) FROM faces WHERE person_id > 0 GROUP BY person_id")
         face_counts = {r[0]: r[1] for r in cursor.fetchall()}
 
-        cursor.execute('''
-            SELECT faces.image_id, images.file_path, faces.person_id, people.custom_name
-            FROM faces
-            JOIN images ON faces.image_id = images.id
-            LEFT JOIN people ON faces.person_id = people.id
-            WHERE faces.person_id IS NOT NULL AND faces.person_id != ""
-        ''')
-        rows = cursor.fetchall()
+        try:
+            cursor.execute('''
+                SELECT faces.image_id, images.file_path, faces.person_id, people.custom_name,
+                       COALESCE(faces.assignment_status, '')
+                FROM faces
+                JOIN images ON faces.image_id = images.id
+                LEFT JOIN people ON faces.person_id = people.id
+                WHERE (faces.person_id IS NOT NULL AND faces.person_id != "")
+                   OR COALESCE(faces.assignment_status, '') = 'REVIEW'
+            ''')
+            rows = cursor.fetchall()
+        except sqlite3.OperationalError:
+            # Backward compatibility for DBs created before assignment_status existed.
+            cursor.execute('''
+                SELECT faces.image_id, images.file_path, faces.person_id, people.custom_name
+                FROM faces
+                JOIN images ON faces.image_id = images.id
+                LEFT JOIN people ON faces.person_id = people.id
+                WHERE faces.person_id IS NOT NULL AND faces.person_id != ""
+            ''')
+            rows = [(r[0], r[1], r[2], r[3], "") for r in cursor.fetchall()]
         conn.close()
 
     except sqlite3.OperationalError:
@@ -146,8 +159,10 @@ def load_cluster_labels(db_path):
     image_persons = {}
     image_paths = {}
 
-    for img_id, file_path, person_id, custom_name in rows:
-        if person_id == -1:
+    for img_id, file_path, person_id, custom_name, assignment_status in rows:
+        if assignment_status == "REVIEW":
+            name = "Pending_Review"
+        elif person_id == -1:
             name = "Unknown_Faces"
         else:
             if custom_name and custom_name.strip():
@@ -223,6 +238,7 @@ def main():
 
     # ---- Create directory structure ----
     people_dir = os.path.join(archive_dir, "People")
+    pending_dir = os.path.join(archive_dir, "_pending")
     small_group_dir = os.path.join(people_dir, "SmallGroups_2-3_faces")
     large_group_dir = os.path.join(people_dir, "LargeGroups_4+_faces")
     unknown_dir = os.path.join(people_dir, "Unknown_Faces")
@@ -230,6 +246,7 @@ def main():
     os.makedirs(small_group_dir, exist_ok=True)
     os.makedirs(large_group_dir, exist_ok=True)
     os.makedirs(unknown_dir, exist_ok=True)
+    os.makedirs(pending_dir, exist_ok=True)
 
     start_time = time.time()
     placed = 0
@@ -259,6 +276,8 @@ def main():
     for label in sorted(all_person_labels):
         if label == "Unknown_Faces":
             person_dirs[label] = unknown_dir
+        elif label == "Pending_Review":
+            person_dirs[label] = pending_dir
         else:
             pdir = os.path.join(people_dir, str(label))
             os.makedirs(pdir, exist_ok=True)
