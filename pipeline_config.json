@@ -1,11 +1,11 @@
 {
-  "master_dir": "D:\\POCOP - Copy",
+  "master_dir": "D:\\POCOP - Copy\\Snapchat",
   "db_path": "D:\\PhotoAI\\photo_catalog.db",
   "output_dir": "D:\\Photos",
   "det_size": 1024,
   "det_thresh": 0.7,
   "min_cluster_size": 7,
-  "merge_threshold": 0.35,
+  "merge_threshold": 0.3,
   "confidence_threshold": 0.35,
   "clip_model_size": "large",
   "compress_input": "D:/POCOP - Copy/OG",

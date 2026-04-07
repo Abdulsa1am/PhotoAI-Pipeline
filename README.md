@@ -63,6 +63,20 @@ Double-click `run.bat` to launch.
 
 ---
 
+## 📚 Documentation
+
+- [docs/PIPELINE_FLOW.md](docs/PIPELINE_FLOW.md) — Complete phase flow, dependencies, and run modes
+- [docs/STABILITY_GUIDE.md](docs/STABILITY_GUIDE.md) — Large-run stability and DirectML troubleshooting
+- [docs/CONFIG_REFERENCE.md](docs/CONFIG_REFERENCE.md) — Static vs dynamic settings and reset rules
+- [docs/PHASE_DETAILS/00-setup-clip.md](docs/PHASE_DETAILS/00-setup-clip.md)
+- [docs/PHASE_DETAILS/01-face-extraction.md](docs/PHASE_DETAILS/01-face-extraction.md)
+- [docs/PHASE_DETAILS/02-face-clustering.md](docs/PHASE_DETAILS/02-face-clustering.md)
+- [docs/PHASE_DETAILS/03-classify-images.md](docs/PHASE_DETAILS/03-classify-images.md)
+- [docs/PHASE_DETAILS/04-build-archive.md](docs/PHASE_DETAILS/04-build-archive.md)
+- [docs/PHASE_DETAILS/05-compress-images.md](docs/PHASE_DETAILS/05-compress-images.md)
+
+---
+
 ## 🧠 AI Model Architecture
 
 PhotoAI uses a multi-stage "Ensemble" of state-of-the-art computer vision models, all running locally on your hardware.
@@ -182,8 +196,9 @@ python app.py
 
 In the GUI:
 1. Set your **Source Directory**, **Database Path**, and **Output Directory** in the config panel
-2. Click **▶▶ Run Full Pipeline** to execute all 5 steps sequentially
+2. Click **▶▶ Run Full Pipeline** to execute steps **0→4** sequentially
 3. Watch the live log and system monitor (CPU/GPU/img/s)
+4. Run **Step 5 (Compress Images)** separately if you want post-archive compression
 
 ---
 
@@ -196,7 +211,7 @@ In the GUI:
 | `1_face_extraction.py` | Face detection + embedding extraction | RX 5700 XT (DirectML) |
 | `2_face_clustering.py` | HDBSCAN clustering + centroid merge | Ryzen 7 (all cores) |
 | `3_classify_images.py` | CLIP zero-shot semantic classification | RX 5700 XT (DirectML) |
-| `4_build_archive.py` | Final archive assembly | SSD I/O |
+| `4_build_archive.py` | Final archive assembly (works even if Step 2/3 were skipped) | SSD I/O |
 | `pipeline_config.json` | Config saved by GUI (auto-created) | — |
 | `photo_catalog.db` | SQLite database (auto-created) | — |
 
@@ -208,7 +223,8 @@ In the GUI:
 |---|---|
 | **Configuration panel** | Set source dir, DB path, output dir, detection size, cluster parameters |
 | **Script cards** (0–4) | Run any individual step; shows ● Ready / ● Running / ✓ Done / ✗ Error |
-| **Run Full Pipeline** | Executes all 5 steps sequentially; aborts on first error |
+| **Run Full Pipeline** | Executes steps 0→4 sequentially; aborts on first error |
+| **Step 5 - Compress Images** | Separate optional run after archive build |
 | **CPU bar** (blue) | Live CPU utilization + session average |
 | **GPU bar** (green) | Live GPU utilization + session average (via Windows PDH counters) |
 | **Progress bar** (yellow) | Images processed / total, parsed from script output |
@@ -220,6 +236,20 @@ In the GUI:
 
 ---
 
+## 🧾 Run Trace Logs
+
+Every GUI run writes:
+
+- **Latest trace (rolling):** `d:\PhotoAI\logs\last_run.log`
+- **History traces:** `d:\PhotoAI\logs\history\run_YYYYMMDD_HHMMSS.log`
+- **Retention:** keeps the latest **10** history traces automatically
+- **Includes:** start/finish timestamps, run mode, config snapshot, and full script output
+- **Cleaned output:** ANSI control characters are stripped in files for readability
+
+Use `last_run.log` for quick debugging and `logs\history\` for comparing recent runs.
+
+---
+
 ## ⚙️ Configuration
 
 All settings can be changed in the GUI. They are saved to `pipeline_config.json` and applied automatically. 
@@ -227,6 +257,9 @@ All settings can be changed in the GUI. They are saved to `pipeline_config.json`
 > 💡 **Dynamic vs Static Settings:**
 > - **Dynamic settings:** `Min Cluster`, `Merge Thresh`, and `Confidence` are evaluated dynamically during **Step 4 (Build Archive)**. If you change these, you DO NOT need to reset the database. Just click "Run Full Pipeline" again and the AI will reorganize your archive differently in under 2 seconds.
 > - **Static settings:** `Det Size` and `Det Thresh` control the raw data extracted from pixels into the database. If you change these, you **MUST** click "Reset Database" for them to take effect, otherwise the AI will skip your photos thinking they are already processed.
+> - **DirectML limitation (verified):** On some setups (including ORT DirectML 1.23.0), RetinaFace fails with `ONNXRuntimeError ... Reshape_223 ... 80070057` for `Det Size` values other than `640`.
+> - **GPU-safe high-accuracy mode:** If you choose `Det Size != 640`, Step 1 keeps DirectML stable at 640 internally and upscales input frames before detection to preserve small-face sensitivity while staying on GPU.
+> - **Automatic fallback:** If DirectML still fails, Step 1 auto-detects the reshape error and re-initializes InsightFace on CPU so extraction completes.
 
 ### Script 1 — Face Extraction (Static)
 | Parameter | Default | Description |

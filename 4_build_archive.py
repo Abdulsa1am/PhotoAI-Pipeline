@@ -9,8 +9,8 @@ Uses hard links (os.link) for same-drive organization (zero disk cost,
 
 Prerequisites:
     - Script 1 has been run (face extraction)
-    - Script 2 has been run (face clustering — populates cluster labels)
-    - Script 3 has been run (semantic classification)
+    - Script 2 is optional (if skipped, face images go to Unknown_Faces/group folders)
+    - Script 3 is optional (if skipped, non-face images go to Uncategorized)
 
 Usage:
     python 4_build_archive.py
@@ -47,6 +47,14 @@ if os.path.exists(_cfg_path):
 # =======================================
 
 placed_source_paths = set()
+
+
+def table_exists(cursor, table_name):
+    cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        (table_name,)
+    )
+    return cursor.fetchone() is not None
 
 def get_next_archive_dir(merge_thresh, conf_thresh):
     """Create the next sequential archive directory."""
@@ -171,6 +179,14 @@ def main():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
+    has_faces_table = table_exists(cursor, "faces")
+    has_classifications_table = table_exists(cursor, "classifications")
+
+    if not has_faces_table:
+        print("  [FATAL] Database is missing 'faces' table. Run Script 1 first.")
+        conn.close()
+        sys.exit(1)
+
     # ---- Load all images with reliable face count from faces table ----
     # We use COUNT(faces.id) rather than images.face_count because the
     # face_count column may be stale (e.g. from a pre-ArcFace database).
@@ -183,12 +199,15 @@ def main():
     all_images = cursor.fetchall()  # (id, file_path, real_face_count)
     print(f"  Total images in database: {len(all_images)}")
 
-    # ---- Load classifications ----
-    cursor.execute("SELECT image_id, category, confidence FROM classifications")
     classification_map = {}
-    for img_id, category, confidence in cursor.fetchall():
-        classification_map[img_id] = (category, confidence)
-    print(f"  Images with classifications: {len(classification_map)}")
+    if has_classifications_table:
+        cursor.execute("SELECT image_id, category, confidence FROM classifications")
+        for img_id, category, confidence in cursor.fetchall():
+            classification_map[img_id] = (category, confidence)
+        print(f"  Images with classifications: {len(classification_map)}")
+    else:
+        print("  [INFO] 'classifications' table not found. Script 3 is optional; semantic routing is skipped.")
+        print("  Images with classifications: 0")
 
     conn.close()
 
@@ -331,16 +350,27 @@ def main():
     # ---- Phase 3: Handle unprocessed images (no-face, no-classification) ----
     # Images in DB but not classified (e.g., Script 3 wasn't run yet).
     # Use faces table join (not face_count column) as source of truth.
-    cursor_check = sqlite3.connect(DB_PATH).cursor()
-    cursor_check.execute('''
-        SELECT images.id, images.file_path
-        FROM images
-        LEFT JOIN faces ON faces.image_id = images.id
-        LEFT JOIN classifications ON classifications.image_id = images.id
-        WHERE faces.id IS NULL
-          AND classifications.image_id IS NULL
-        GROUP BY images.id
-    ''')
+    check_conn = sqlite3.connect(DB_PATH)
+    cursor_check = check_conn.cursor()
+    if has_classifications_table:
+        cursor_check.execute('''
+            SELECT images.id, images.file_path
+            FROM images
+            LEFT JOIN faces ON faces.image_id = images.id
+            LEFT JOIN classifications ON classifications.image_id = images.id
+            WHERE faces.id IS NULL
+              AND classifications.image_id IS NULL
+            GROUP BY images.id
+        ''')
+    else:
+        # If Script 3 was skipped, every non-face image is effectively unclassified.
+        cursor_check.execute('''
+            SELECT images.id, images.file_path
+            FROM images
+            LEFT JOIN faces ON faces.image_id = images.id
+            WHERE faces.id IS NULL
+            GROUP BY images.id
+        ''')
     unprocessed = cursor_check.fetchall()
 
     if unprocessed:
@@ -359,7 +389,7 @@ def main():
 
         print(f"    Placed {uncategorized} files into Uncategorized/")
 
-    cursor_check.connection.close()
+    check_conn.close()
 
     # ---- Phase 4 removed (User requested to skip unsupported formats entirely) ----
 

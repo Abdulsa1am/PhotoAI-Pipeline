@@ -37,6 +37,10 @@ except Exception:
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(SCRIPT_DIR, "pipeline_config.json")
+TRACE_DIR = os.path.join(SCRIPT_DIR, "logs")
+TRACE_HISTORY_DIR = os.path.join(TRACE_DIR, "history")
+LAST_RUN_TRACE_PATH = os.path.join(TRACE_DIR, "last_run.log")
+TRACE_HISTORY_MAX_RUNS = 10
 
 # ---- Theme Colors (GitHub Dark) ----
 BG          = "#0d1117"
@@ -217,6 +221,8 @@ class PhotoAIApp:
         self.run_buttons   = {}
         self.card_frames   = {}
         self.config_vars   = {}
+        self._trace_fp     = None
+        self._current_trace_path = None
 
         self.monitor = SystemMonitor()
         self.monitor.start()
@@ -783,12 +789,187 @@ class PhotoAIApp:
         except Exception:
             pass
 
+    def _strip_ansi(self, text):
+        """Remove ANSI escape/control characters for clean trace files."""
+        cleaned = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', text)
+        return cleaned.replace('\x1b', '')
+
+    def _make_trace_history_path(self):
+        """Build a unique timestamped trace file path under logs/history/."""
+        os.makedirs(TRACE_HISTORY_DIR, exist_ok=True)
+        base = time.strftime("run_%Y%m%d_%H%M%S")
+        candidate = os.path.join(TRACE_HISTORY_DIR, f"{base}.log")
+        if not os.path.exists(candidate):
+            return candidate
+        for idx in range(1, 1000):
+            candidate = os.path.join(TRACE_HISTORY_DIR, f"{base}_{idx:02d}.log")
+            if not os.path.exists(candidate):
+                return candidate
+        # Extremely unlikely fallback: append process id.
+        return os.path.join(TRACE_HISTORY_DIR, f"{base}_{os.getpid()}.log")
+
+    def _prune_trace_history(self):
+        """Keep only the latest TRACE_HISTORY_MAX_RUNS trace files."""
+        os.makedirs(TRACE_HISTORY_DIR, exist_ok=True)
+        history_files = []
+        for name in os.listdir(TRACE_HISTORY_DIR):
+            if not name.lower().endswith('.log'):
+                continue
+            full_path = os.path.join(TRACE_HISTORY_DIR, name)
+            if os.path.isfile(full_path):
+                history_files.append(full_path)
+
+        if len(history_files) <= TRACE_HISTORY_MAX_RUNS:
+            return
+
+        history_files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        stale_files = history_files[TRACE_HISTORY_MAX_RUNS:]
+        for stale_path in stale_files:
+            removed = False
+            for _ in range(3):
+                try:
+                    os.remove(stale_path)
+                    removed = True
+                    break
+                except PermissionError:
+                    time.sleep(0.1)
+                except OSError:
+                    break
+            if not removed:
+                self._append_log(f"[WARN] Could not prune old trace file: {stale_path}\n", "warn")
+
+    def _archive_last_run_trace(self):
+        """Copy latest run trace into logs/history and enforce retention."""
+        if not self._current_trace_path or not os.path.exists(self._current_trace_path):
+            return
+        history_path = self._make_trace_history_path()
+        try:
+            with open(self._current_trace_path, 'r', encoding='utf-8', errors='replace') as src_fp:
+                content = src_fp.read()
+            with open(history_path, 'w', encoding='utf-8', newline='') as dst_fp:
+                dst_fp.write(content)
+            self._prune_trace_history()
+        except Exception as exc:
+            self._append_log(f"[WARN] Failed to archive run trace: {type(exc).__name__}: {exc}\n", "warn")
+
+    def _start_run_trace(self, run_name, script_path=None):
+        """Start (overwrite) the rolling last-run trace file."""
+        os.makedirs(TRACE_DIR, exist_ok=True)
+        os.makedirs(TRACE_HISTORY_DIR, exist_ok=True)
+        self._close_run_trace()
+        self._prune_trace_history()
+
+        self._trace_fp = open(LAST_RUN_TRACE_PATH, 'w', encoding='utf-8', newline='')
+        self._current_trace_path = LAST_RUN_TRACE_PATH
+        started = time.strftime("%Y-%m-%d %H:%M:%S")
+        mode = "full-pipeline" if self.is_pipeline_run else "single-step"
+
+        self._trace_fp.write("=" * 70 + "\n")
+        self._trace_fp.write("PhotoAI Last Run Trace\n")
+        self._trace_fp.write(f"Started   : {started}\n")
+        self._trace_fp.write(f"Run       : {run_name}\n")
+        self._trace_fp.write(f"Mode      : {mode}\n")
+        if script_path:
+            self._trace_fp.write(f"Script    : {script_path}\n")
+        self._trace_fp.write(f"Python    : {sys.executable}\n")
+        self._trace_fp.write("-" * 70 + "\n")
+        self._trace_fp.write("Config snapshot:\n")
+
+        cfg = {k: v.get() for k, v in self.config_vars.items()}
+        self._trace_fp.write(json.dumps(cfg, indent=2, ensure_ascii=False))
+        self._trace_fp.write("\n" + "=" * 70 + "\n")
+        self._trace_fp.flush()
+
+    def _append_run_trace(self, text):
+        if not self._trace_fp:
+            return
+        cleaned = self._strip_ansi(text)
+        if not cleaned:
+            return
+        self._trace_fp.write(cleaned)
+        if not cleaned.endswith("\n"):
+            self._trace_fp.write("\n")
+        self._trace_fp.flush()
+
+    def _close_run_trace(self, returncode=None):
+        if not self._trace_fp:
+            return
+        should_archive = returncode is not None
+        if returncode is not None:
+            finished = time.strftime("%Y-%m-%d %H:%M:%S")
+            self._trace_fp.write("\n" + "=" * 70 + "\n")
+            self._trace_fp.write(f"Finished  : {finished}\n")
+            self._trace_fp.write(f"Exit code : {returncode}\n")
+            self._trace_fp.write("=" * 70 + "\n")
+        self._trace_fp.flush()
+        self._trace_fp.close()
+        self._trace_fp = None
+        if should_archive:
+            self._archive_last_run_trace()
+
+    def _validate_extract_config(self):
+        """Validate config required for face extraction before launch."""
+        master_dir = self.config_vars.get("master_dir", tk.StringVar()).get().strip()
+        db_path = self.config_vars.get("db_path", tk.StringVar()).get().strip()
+        det_size_raw = self.config_vars.get("det_size", tk.StringVar(value="640")).get().strip()
+        det_thresh_raw = self.config_vars.get("det_thresh", tk.StringVar(value="0.5")).get().strip()
+
+        if not master_dir or not os.path.isdir(master_dir):
+            messagebox.showerror("Invalid Source Directory", "Source Directory does not exist. Please choose a valid folder before running extraction.")
+            return False
+
+        if not db_path:
+            messagebox.showerror("Invalid Database Path", "Database Path is empty. Please set a valid .db path.")
+            return False
+
+        db_parent = os.path.dirname(db_path) or "."
+        if not os.path.isdir(db_parent):
+            messagebox.showerror("Invalid Database Path", "Database folder does not exist. Please choose an existing folder for the database.")
+            return False
+
+        try:
+            det_size = int(float(det_size_raw))
+        except ValueError:
+            messagebox.showerror("Invalid Det Size", "Det Size must be a whole number (e.g. 640).")
+            return False
+
+        if det_size < 160 or det_size > 2048:
+            messagebox.showerror("Invalid Det Size", "Det Size must be between 160 and 2048.")
+            return False
+
+        try:
+            det_thresh = float(det_thresh_raw)
+        except ValueError:
+            messagebox.showerror("Invalid Det Thresh", "Det Thresh must be a number between 0.0 and 1.0.")
+            return False
+
+        if det_thresh < 0.0 or det_thresh > 1.0:
+            messagebox.showerror("Invalid Det Thresh", "Det Thresh must be between 0.0 and 1.0.")
+            return False
+
+        if det_size != 640:
+            proceed = messagebox.askyesno(
+                "Detection Size Warning",
+                "On some DirectML setups, Step 1 may fail for Det Size values other than 640. "
+                "If that happens, PhotoAI will fall back to CPU for extraction (slower but stable). Continue?"
+            )
+            if not proceed:
+                return False
+
+        return True
+
     # ---------------------------------------------------------- Script Exec
     def run_script(self, key):
         if self.running:
             messagebox.showwarning("Busy", "A script is already running.")
             return
+        if key == "extract" and not self._validate_extract_config():
+            return
         self._save_config()
+
+        _, title, _, script_file = SCRIPTS[key]
+        script_path = os.path.join(SCRIPT_DIR, script_file)
+
         self.current_key = key
         self.running = True
         self.is_pipeline_run = False
@@ -806,10 +987,10 @@ class PhotoAIApp:
         self._eta_str   = ""
         self.monitor.reset_averages()
 
-        _, title, _, script_file = SCRIPTS[key]
+        self._start_run_trace(f"Step {SCRIPTS[key][0]} - {title}", script_path=script_path)
+        self._append_log(f"Trace file: {LAST_RUN_TRACE_PATH}\n", "accent")
         self._append_log(f"━━━ Starting: {title} ━━━\n", "accent")
 
-        script_path = os.path.join(SCRIPT_DIR, script_file)
         thread = threading.Thread(target=self._exec_subprocess,
                                   args=(script_path,), daemon=True)
         thread.start()
@@ -820,6 +1001,9 @@ class PhotoAIApp:
             messagebox.showwarning("Busy", "A script is already running.")
             return
         self._save_config()
+
+        script_path = os.path.join(SCRIPT_DIR, "5_compress_images.py")
+
         self.current_key = "compress"
         self.running = True
         self.is_pipeline_run = False
@@ -837,9 +1021,10 @@ class PhotoAIApp:
         self._eta_str   = ""
         self.monitor.reset_averages()
 
+        self._start_run_trace("Step 5 - Compress Images", script_path=script_path)
+        self._append_log(f"Trace file: {LAST_RUN_TRACE_PATH}\n", "accent")
         self._append_log("━━━ Starting: Image Compression ━━━\n", "accent")
 
-        script_path = os.path.join(SCRIPT_DIR, "5_compress_images.py")
         thread = threading.Thread(target=self._exec_subprocess,
                                   args=(script_path,), daemon=True)
         thread.start()
@@ -848,8 +1033,17 @@ class PhotoAIApp:
         if self.running:
             messagebox.showwarning("Busy", "A script is already running.")
             return
+        if not self._validate_extract_config():
+            return
         self._save_config()
+
+        self.current_key = "all"
+        self.pipeline_queue = list(PIPELINE_ORDER)
+        self.is_pipeline_run = True
+        self._start_run_trace("Full Pipeline")
+
         self._clear_log()
+        self._append_log(f"Trace file: {LAST_RUN_TRACE_PATH}\n", "accent")
         self._append_log("━━━ Running Full Pipeline ━━━\n\n", "accent")
 
         # Reset all statuses
@@ -857,8 +1051,6 @@ class PhotoAIApp:
             self._set_status(key, "pending")
         self._set_status("all", "running")
 
-        self.pipeline_queue = list(PIPELINE_ORDER)
-        self.is_pipeline_run = True
         self._run_next_pipeline_step()
 
     def _run_next_pipeline_step(self):
@@ -879,6 +1071,8 @@ class PhotoAIApp:
                 f"  GPU Avg: " + (f"{gpu_a:.0f}%\n" if gpu_a >= 0 else "(N/A)\n"),
                 "success"
             )
+
+            self._close_run_trace(returncode=0)
 
             # Auto-open the naming UI after a successful full run
             self.root.after(1000, self._open_name_faces_ui)
@@ -903,6 +1097,7 @@ class PhotoAIApp:
         self._append_log(f"\n━━━ Step {SCRIPTS[key][0]}: {title} ━━━\n", "accent")
 
         script_path = os.path.join(SCRIPT_DIR, script_file)
+        self._append_run_trace(f"Script: {script_path}\n")
         thread = threading.Thread(target=self._exec_subprocess,
                                   args=(script_path,), daemon=True)
         thread.start()
@@ -995,6 +1190,7 @@ class PhotoAIApp:
                 self.pipeline_queue.clear()
                 self._set_status("all", "error")
                 self._append_log("\n[PIPELINE ABORTED] Fix the error and retry.\n", "error")
+            self.is_pipeline_run = False
 
         self.running = False
         self.current_process = None
@@ -1013,6 +1209,9 @@ class PhotoAIApp:
             fg=GREEN_LIT if returncode == 0 else RED_LIT
         )
         self.timer_label.configure(text=f"⏱ {elapsed:.1f}s")
+
+        if not self.is_pipeline_run:
+            self._close_run_trace(returncode=returncode)
 
     # --------------------------------------------------------------- Helpers
     def _set_status(self, key, state):
@@ -1056,6 +1255,7 @@ class PhotoAIApp:
             self.log.insert("end", text)
         self.log.see("end")
         self.log.configure(state="disabled")
+        self._append_run_trace(text)
 
     def _clear_log(self):
         self.log.configure(state="normal")
@@ -1118,6 +1318,7 @@ class PhotoAIApp:
             else:
                 return
         self._save_config()
+        self._close_run_trace()
         self.monitor.stop()
         self.root.destroy()
 

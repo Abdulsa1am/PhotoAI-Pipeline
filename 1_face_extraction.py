@@ -14,12 +14,18 @@ import os
 import sqlite3
 import pickle
 import json
+import traceback
 import cv2
 import numpy as np
 from PIL import Image
 from PIL.ExifTags import Base as ExifBase
 from insightface.app import FaceAnalysis
 import time
+
+try:
+    import onnxruntime as ort
+except Exception:
+    ort = None
 
 # ============ CONFIGURATION ============
 MASTER_DIR = r"D:\POCOP - Copy\+"
@@ -102,9 +108,30 @@ def setup_database():
     return conn
 
 
-def init_face_app():
-    """Initialize InsightFace with DirectML (AMD GPU) acceleration."""
-    providers = ['DmlExecutionProvider', 'CPUExecutionProvider']
+def _runtime_providers():
+    if ort is None:
+        return []
+    try:
+        return ort.get_available_providers()
+    except Exception:
+        return []
+
+
+def _is_dml_reshape_runtime_error(exc):
+    msg = f"{type(exc).__name__}: {exc}"
+    return (
+        "Reshape_223" in msg
+        and "ONNXRuntimeError" in msg
+        and ("DmlExecutionProvider" in msg or "80070057" in msg)
+    )
+
+
+def init_face_app(providers=None, det_size=None):
+    """Initialize InsightFace with requested providers."""
+    if providers is None:
+        providers = ['DmlExecutionProvider', 'CPUExecutionProvider']
+    if det_size is None:
+        det_size = DET_SIZE
 
     # 'buffalo_l' includes:
     #   - RetinaFace-10GF detector
@@ -113,11 +140,11 @@ def init_face_app():
         name='buffalo_l',
         providers=providers
     )
-    app.prepare(ctx_id=0, det_size=DET_SIZE, det_thresh=DET_THRESH)
+    app.prepare(ctx_id=0, det_size=det_size, det_thresh=DET_THRESH)
 
     print(f"  InsightFace initialized")
     print(f"  Providers: {providers}")
-    print(f"  Det size:  {DET_SIZE}")
+    print(f"  Det size:  {det_size}")
     return app
 
 
@@ -165,7 +192,40 @@ def process_images():
     print("  Script 1: Face Extraction (InsightFace + DirectML)")
     print("=" * 60)
 
-    app = init_face_app()
+    print(f"  Effective config:")
+    print(f"    Source dir : {MASTER_DIR}")
+    print(f"    DB path    : {DB_PATH}")
+    print(f"    Det size   : {DET_SIZE}")
+    print(f"    Det thresh : {DET_THRESH}")
+    print(f"    Max dim    : {MAX_DIM}")
+
+    if not os.path.isdir(MASTER_DIR):
+        print(f"\n[FATAL] Source directory does not exist: {MASTER_DIR}")
+        conn.close()
+        return
+
+    available_providers = _runtime_providers()
+    if ort is not None:
+        print(f"  ONNX Runtime version: {ort.__version__}")
+    print(f"  Available providers : {available_providers if available_providers else 'unknown'}")
+
+    requested_det_side = DET_SIZE[0] if isinstance(DET_SIZE, tuple) else int(DET_SIZE)
+    runtime_det_size = DET_SIZE
+    gpu_safe_upscale_factor = 1.0
+
+    # Known DirectML bug in some ORT versions causes RetinaFace reshape failures for
+    # det_size values other than 640. Keep GPU active by running 640 internally and
+    # upscaling input image to preserve small-face sensitivity.
+    if 'DmlExecutionProvider' in available_providers and requested_det_side != 640:
+        runtime_det_size = (640, 640)
+        gpu_safe_upscale_factor = max(1.0, requested_det_side / 640.0)
+        print(f"  [INFO] GPU-safe high-accuracy mode enabled")
+        print(f"  [INFO] Requested det_size={requested_det_side}, runtime det_size=(640, 640)")
+        print(f"  [INFO] Input upscaling factor: x{gpu_safe_upscale_factor:.2f}")
+
+    app_providers = ['DmlExecutionProvider', 'CPUExecutionProvider']
+    dml_fallback_applied = False
+    app = init_face_app(providers=app_providers, det_size=runtime_det_size)
 
     # Collect all image paths
     all_paths = collect_image_paths(MASTER_DIR)
@@ -186,59 +246,121 @@ def process_images():
 
     start_time = time.time()
     total_faces = 0
-    errors = 0
+    processing_errors = 0
+    unreadable_skips = 0
+    traceback_samples = 0
+    smoke_test_done = False
 
     for idx, file_path in enumerate(pending, 1):
-        try:
+        attempts = 0
+        while attempts < 2:
+            attempts += 1
+            try:
             # Load image with EXIF rotation handling
-            img = load_with_exif_rotation(file_path)
-            if img is None:
-                print(f"  [SKIP] Cannot read: {file_path}")
-                continue
+                img = load_with_exif_rotation(file_path)
+                if img is None:
+                    unreadable_skips += 1
+                    print(f"  [SKIP] Cannot read: {file_path}")
+                    break
 
             # Resize very large images for speed
-            h, w = img.shape[:2]
-            if max(h, w) > MAX_DIM:
-                scale = MAX_DIM / max(h, w)
-                img = cv2.resize(img, None, fx=scale, fy=scale,
-                                 interpolation=cv2.INTER_AREA)
+                h, w = img.shape[:2]
+                if max(h, w) > MAX_DIM:
+                    scale = MAX_DIM / max(h, w)
+                    img = cv2.resize(img, None, fx=scale, fy=scale,
+                                     interpolation=cv2.INTER_AREA)
 
-            # Detect faces + extract embeddings (GPU accelerated)
-            faces = app.get(img)
-            face_count = len(faces)
+            # Fail early on systemic runtime/provider failures.
+                detect_img = img
+                if (
+                    "DmlExecutionProvider" in app_providers
+                    and gpu_safe_upscale_factor > 1.0
+                ):
+                    # Keep memory bounded while improving small-face detectability.
+                    max_side = max(img.shape[:2])
+                    max_safe_side = max(MAX_DIM * 2, 2560)
+                    safe_factor = min(gpu_safe_upscale_factor, max_safe_side / max_side)
+                    if safe_factor > 1.01:
+                        detect_img = cv2.resize(
+                            img,
+                            None,
+                            fx=safe_factor,
+                            fy=safe_factor,
+                            interpolation=cv2.INTER_CUBIC
+                        )
+
+                if not smoke_test_done:
+                    faces = app.get(detect_img)
+                    smoke_test_done = True
+                    print(f"  [SMOKE] First image inference OK ({len(faces)} faces)")
+                else:
+                    # Detect faces + extract embeddings (GPU accelerated)
+                    faces = app.get(detect_img)
+                face_count = len(faces)
+
+                cursor.execute("SAVEPOINT image_tx")
 
             # Insert image record with face count
-            cursor.execute(
-                "INSERT INTO images (file_path, face_count) VALUES (?, ?)",
-                (file_path, face_count)
-            )
-            image_id = cursor.lastrowid
+                cursor.execute(
+                    "INSERT INTO images (file_path, face_count) VALUES (?, ?)",
+                    (file_path, face_count)
+                )
+                image_id = cursor.lastrowid
 
             # Insert each face encoding
-            for face in faces:
-                encoding_bytes = pickle.dumps(face.embedding)
-                bbox_str = str(face.bbox.tolist())
-                det_score = float(face.det_score)
-                cursor.execute(
-                    "INSERT INTO faces (image_id, encoding, bbox, det_score) VALUES (?, ?, ?, ?)",
-                    (image_id, encoding_bytes, bbox_str, det_score)
-                )
-                total_faces += 1
+                for face in faces:
+                    encoding_bytes = pickle.dumps(face.embedding)
+                    bbox_str = str(face.bbox.tolist())
+                    det_score = float(face.det_score)
+                    cursor.execute(
+                        "INSERT INTO faces (image_id, encoding, bbox, det_score) VALUES (?, ?, ?, ?)",
+                        (image_id, encoding_bytes, bbox_str, det_score)
+                    )
+                    total_faces += 1
+
+                cursor.execute("RELEASE SAVEPOINT image_tx")
 
             # Periodic batch commit + progress report
-            if idx % BATCH_SIZE == 0:
-                conn.commit()
-                elapsed = time.time() - start_time
-                rate = idx / elapsed
-                eta = (len(pending) - idx) / rate
-                print(f"  [{idx:>6}/{len(pending)}] "
-                      f"faces: {total_faces} | "
-                      f"{rate:.1f} img/s | "
-                      f"ETA: {eta/60:.0f} min")
+                if idx % BATCH_SIZE == 0:
+                    conn.commit()
+                    elapsed = time.time() - start_time
+                    rate = idx / elapsed
+                    eta = (len(pending) - idx) / rate
+                    print(f"  [{idx:>6}/{len(pending)}] "
+                          f"faces: {total_faces} | "
+                          f"{rate:.1f} img/s | "
+                          f"ETA: {eta/60:.0f} min")
+                break
 
-        except Exception as e:
-            errors += 1
-            print(f"  [ERROR] {file_path}: {e}")
+            except Exception as e:
+                try:
+                    cursor.execute("ROLLBACK TO SAVEPOINT image_tx")
+                    cursor.execute("RELEASE SAVEPOINT image_tx")
+                except sqlite3.Error:
+                    pass
+
+                # Known DirectML issue in some ORT builds for det-size != 640.
+                if (
+                    not dml_fallback_applied
+                    and "DmlExecutionProvider" in app_providers
+                    and _is_dml_reshape_runtime_error(e)
+                ):
+                    print("  [WARN] DirectML RetinaFace runtime failure detected (Reshape_223 / 80070057).")
+                    print("  [WARN] Retrying with CPUExecutionProvider so det_size can remain unchanged.")
+                    app_providers = ['CPUExecutionProvider']
+                    # CPU path can use the requested det_size directly.
+                    app = init_face_app(providers=app_providers, det_size=DET_SIZE)
+                    dml_fallback_applied = True
+                    gpu_safe_upscale_factor = 1.0
+                    continue
+
+                processing_errors += 1
+                print(f"  [ERROR] {file_path}: {type(e).__name__}: {e}")
+                if traceback_samples < 3:
+                    tb = traceback.format_exc(limit=6).strip()
+                    print(f"    Traceback sample #{traceback_samples + 1}: {tb}")
+                    traceback_samples += 1
+                break
 
     # Final commit
     conn.commit()
@@ -249,10 +371,13 @@ def process_images():
     print(f"  Extraction complete!")
     print(f"  Images processed : {len(pending)}")
     print(f"  Faces extracted  : {total_faces}")
-    print(f"  Errors           : {errors}")
+    print(f"  Errors           : {processing_errors}")
+    print(f"  Skipped unreadable: {unreadable_skips}")
     print(f"  Total time       : {elapsed/60:.1f} minutes")
     if elapsed > 0:
         print(f"  Average speed    : {len(pending)/elapsed:.1f} images/sec")
+    if len(pending) > 0 and processing_errors == len(pending):
+        print("  [HINT] Every image failed during processing. Check dependency/provider logs above.")
     print(f"{'=' * 60}")
 
 
