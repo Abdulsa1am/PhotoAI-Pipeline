@@ -555,15 +555,15 @@ class PhotoAIApp:
         model_frame.pack(side="left", padx=(10, 10))
         tk.Label(model_frame, text="Vision Model:", font=FONT_SM, fg=ACCENT, bg=CARD_BG).pack(side="left", padx=(0, 4))
         
-        self.config_vars["clip_model_size"] = tk.StringVar(value="base")
-        # base = CLIP-ViT-B/32, large = SigLIP 2 SO400M
-        for m_size in [("base", "Base"), ("large", "Ultra")]:
+        self.config_vars["clip_model_size"] = tk.StringVar(value="clip")
+        # clip = previous Ultra CLIP variant, siglip2 = new Ultra option
+        for m_size in [("clip", "Base"), ("siglip2", "Ultra")]:
             rb = tk.Radiobutton(model_frame, text=m_size[1], variable=self.config_vars["clip_model_size"],
                                 value=m_size[0], font=FONT_SM, fg=TEXT, bg=CARD_BG,
                                 selectcolor=INPUT_BG, activebackground=CARD_BG,
                                 activeforeground=TEXT, indicatoron=False, cursor="hand2")
             rb.pack(side="left", padx=(0, 2))
-        ToolTip(model_frame, "Base: Fast CLIP (340MB, ~30 img/s)\nUltra: State-of-the-Art SigLIP 2 (3.2GB, ~5-8 img/s)")
+        ToolTip(model_frame, "Base: CLIP (previous Ultra model)\nUltra: SigLIP 2 SO400M")
 
         save_btn = tk.Button(params_row, text="💾 Save Config", font=FONT_SM, fg=TEXT, bg=CARD_BG, cursor="hand2", relief="flat", command=self._manual_save_config)
         save_btn.pack(side="right", padx=(12, 2))
@@ -786,6 +786,12 @@ class PhotoAIApp:
                 cfg = json.load(f)
             for key, val in cfg.items():
                 if key in self.config_vars:
+                    if key == "clip_model_size":
+                        val_str = str(val).lower()
+                        if val_str == "base":
+                            val = "clip"
+                        elif val_str == "large":
+                            val = "siglip2"
                     self.config_vars[key].set(str(val))
         except Exception:
             pass
@@ -1285,14 +1291,13 @@ class PhotoAIApp:
         if messagebox.askyesno(
             "Reset Database",
             f"This will delete ALL extracted faces and classifications:\n\n{db_path}\n\n"
-            "You will need to re-run Face Extraction and Classify Images.\n\n"
+            "No pipeline steps will run automatically.\n\n"
             "Continue?",
             icon="warning"
         ):
             try:
                 os.remove(db_path)
                 self._append_log(f"[OK] Database deleted: {db_path}\n", "warning")
-                self._append_log("     Re-run Steps 1-4 to rebuild the archive.\n", "warning")
                 # Reset all card statuses
                 for key in PIPELINE_ORDER:
                     self._set_status(key, "ready")

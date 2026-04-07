@@ -248,6 +248,22 @@ class ClusterHealthMonitor:
         return alerts
 
 
+def _build_hdbscan_clusterer() -> "hdbscan.HDBSCAN":
+    kwargs = {
+        "min_cluster_size": MIN_CLUSTER_SIZE,
+        "min_samples": MIN_SAMPLES,
+        "metric": HDBSCAN_METRIC,
+        "cluster_selection_method": HDBSCAN_CLUSTER_SELECTION,
+        "core_dist_n_jobs": -1,
+    }
+
+    # hdbscan's default BallTree path rejects metric='cosine'; generic works.
+    if str(HDBSCAN_METRIC).strip().lower() == "cosine":
+        kwargs["algorithm"] = "generic"
+
+    return hdbscan.HDBSCAN(**kwargs)
+
+
 def _ensure_schema(conn: sqlite3.Connection) -> None:
     cursor = conn.cursor()
 
@@ -514,14 +530,16 @@ def main():
             cluster_data = leftover_norm  # always use full 512D
             
             start = time.time()
-            clusterer = hdbscan.HDBSCAN(
-                min_cluster_size=MIN_CLUSTER_SIZE,
-                min_samples=MIN_SAMPLES,
-                metric=HDBSCAN_METRIC,
-                cluster_selection_method=HDBSCAN_CLUSTER_SELECTION,
-                core_dist_n_jobs=-1
-            )
-            labels = clusterer.fit_predict(cluster_data)
+            clusterer = _build_hdbscan_clusterer()
+            cluster_input = cluster_data
+            if (
+                str(getattr(clusterer, "metric", "")).strip().lower() == "cosine"
+                and str(getattr(clusterer, "algorithm", "")).strip().lower() == "generic"
+            ):
+                # hdbscan generic cosine path expects float64 in mst_linkage_core.
+                cluster_input = np.asarray(cluster_data, dtype=np.float64)
+
+            labels = clusterer.fit_predict(cluster_input)
         
             unique_labels = [l for l in set(labels) if l != -1]
         

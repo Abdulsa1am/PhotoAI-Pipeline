@@ -28,9 +28,10 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = r"D:\PhotoAI\photo_catalog.db"
 CLIP_MODEL_DIR = os.path.join(PROJECT_ROOT,
                               "models", "clip-vit-base-patch32-onnx")
-CONFIDENCE_THRESHOLD = 0.18
+CONFIDENCE_THRESHOLD = 0.25
 BATCH_SIZE = 50
 CLASSIFY_FACE_IMAGES = False
+ENSEMBLE_MODE = False
 
 # ---- Load overrides from pipeline_config.json (written by GUI) ----
 _cfg_path = os.path.join(PROJECT_ROOT, "pipeline_config.json")
@@ -39,10 +40,25 @@ if os.path.exists(_cfg_path):
         _cfg = json.load(_f)
     DB_PATH              = _cfg.get("db_path", DB_PATH)
     CONFIDENCE_THRESHOLD = float(_cfg.get("confidence_threshold", CONFIDENCE_THRESHOLD))
-    clip_model_size      = _cfg.get("clip_model_size", "base")
-    if clip_model_size == "large":
+    _ensemble_mode_raw   = _cfg.get("ensemble_mode", ENSEMBLE_MODE)
+    if isinstance(_ensemble_mode_raw, str):
+        ENSEMBLE_MODE = _ensemble_mode_raw.strip().lower() in ("1", "true", "yes", "on")
+    else:
+        ENSEMBLE_MODE = bool(_ensemble_mode_raw)
+    clip_model_size      = str(_cfg.get("clip_model_size", "clip")).lower()
+    if clip_model_size in ("clip", "large"):
         CLIP_MODEL_DIR = os.path.join(PROJECT_ROOT,
                                       "models", "clip-vit-large-patch14-onnx")
+    elif clip_model_size in ("siglip2", "ultra"):
+        CLIP_MODEL_DIR = os.path.join(PROJECT_ROOT,
+                                      "models", "siglip2-so400m-patch14-384-onnx")
+    elif clip_model_size == "base":
+        # Backward compatibility for older configs.
+        CLIP_MODEL_DIR = os.path.join(PROJECT_ROOT,
+                                      "models", "clip-vit-base-patch32-onnx")
+    # Direct model path override — takes priority over clip_model_size radio logic
+    if "clip_model_dir" in _cfg:
+        CLIP_MODEL_DIR = _cfg["clip_model_dir"]
 
 # ---- CATEGORY DEFINITIONS ----
 # CLIP uses natural language descriptions for zero-shot classification.
@@ -235,30 +251,30 @@ def load_clip_model():
     return model, processor, is_siglip
 
 
-def build_candidate_labels():
+def build_candidate_labels(categories_dict, ensemble_mode=False):
     """
     Build the list of candidate text labels for CLIP/SigLIP.
     """
     labels = []
-    category_names = []
-    for cat_name, prompts in CATEGORIES.items():
-        labels.append(prompts[0])  # Primary prompt
-        category_names.append(cat_name)
+    label_to_category = {}
+    for cat_name, prompts in categories_dict.items():
+        selected_prompts = prompts if ensemble_mode else prompts[:1]
+        for prompt in selected_prompts:
+            labels.append(prompt)
+            label_to_category[prompt] = cat_name
 
-    return labels, category_names
+    return labels, label_to_category
 
 
-def classify_with_ensemble(model, processor, image, categories_dict, is_siglip=False):
+def classify_with_ensemble(model, processor, image, categories_dict, is_siglip=False, ensemble_mode=False):
     """
     Classify an image using ensemble of multiple prompts per category.
     Returns list of (category_name, score) sorted by score descending.
     """
-    all_labels = []
-    label_to_category = {}
-    for cat_name, prompts in categories_dict.items():
-        for prompt in prompts:
-            all_labels.append(prompt)
-            label_to_category[prompt] = cat_name
+    all_labels, label_to_category = build_candidate_labels(
+        categories_dict,
+        ensemble_mode=ensemble_mode,
+    )
 
     # Run inference
     inputs = processor(
@@ -362,7 +378,14 @@ def main():
             image = Image.open(file_path).convert("RGB")
 
             # Classify using ensemble of prompts
-            results = classify_with_ensemble(model, processor, image, CATEGORIES, is_siglip=is_siglip)
+            results = classify_with_ensemble(
+                model,
+                processor,
+                image,
+                CATEGORIES,
+                is_siglip=is_siglip,
+                ensemble_mode=ENSEMBLE_MODE,
+            )
 
             # Determine category
             top_cat, top_score = results[0]
@@ -390,7 +413,7 @@ def main():
                       f"classified: {classified} | "
                       f"{rate:.1f} img/s | "
                       f"ETA: {eta/60:.0f} min | "
-                      f"last: {final_category} ({top_score:.2f})")
+                        f"last: {final_category} ({top_score:.4f})")
 
         except Exception as e:
             errors += 1

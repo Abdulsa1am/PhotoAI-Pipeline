@@ -76,13 +76,7 @@ class TestAccuracyFixes(unittest.TestCase):
             },
         )
 
-        clusterer = module.hdbscan.HDBSCAN(
-            min_cluster_size=module.MIN_CLUSTER_SIZE,
-            min_samples=module.MIN_SAMPLES,
-            metric=module.HDBSCAN_METRIC,
-            cluster_selection_method=module.HDBSCAN_CLUSTER_SELECTION,
-            core_dist_n_jobs=-1,
-        )
+        clusterer = module._build_hdbscan_clusterer()
 
         self.assertEqual(clusterer.metric, "cosine")
 
@@ -95,15 +89,21 @@ class TestAccuracyFixes(unittest.TestCase):
             },
         )
 
-        clusterer = module.hdbscan.HDBSCAN(
-            min_cluster_size=module.MIN_CLUSTER_SIZE,
-            min_samples=module.MIN_SAMPLES,
-            metric=module.HDBSCAN_METRIC,
-            cluster_selection_method=module.HDBSCAN_CLUSTER_SELECTION,
-            core_dist_n_jobs=-1,
-        )
+        clusterer = module._build_hdbscan_clusterer()
 
         self.assertEqual(clusterer.cluster_selection_method, "leaf")
+
+    def test_hdbscan_cosine_uses_generic_algorithm(self):
+        module, _ = load_cluster_module_with_config(
+            "cluster_module_algorithm",
+            {
+                "hdbscan_metric": "cosine",
+                "hdbscan_cluster_selection_method": "leaf",
+            },
+        )
+
+        clusterer = module._build_hdbscan_clusterer()
+        self.assertEqual(clusterer.algorithm, "generic")
 
     def test_no_pca_applied_to_embeddings(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -180,14 +180,103 @@ class TestAccuracyFixes(unittest.TestCase):
                     captured["shape"] = tuple(data.shape)
                     return np.full(data.shape[0], -1, dtype=int)
 
+            original_hdbscan = module.hdbscan.HDBSCAN
             module.hdbscan.HDBSCAN = FakeHDBSCAN
-            module.main()
+            try:
+                module.main()
+            finally:
+                module.hdbscan.HDBSCAN = original_hdbscan
             logger = module.logging.getLogger("face_assignment_audit")
             for handler in list(logger.handlers):
                 handler.close()
                 logger.removeHandler(handler)
 
             self.assertEqual(captured.get("shape"), (1500, 512))
+
+    def test_hdbscan_cosine_generic_uses_float64_input(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            db_path = os.path.join(tmp_dir, "photo_catalog.db")
+            audit_path = os.path.join(tmp_dir, "assignment_audit.jsonl")
+
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                CREATE TABLE people (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    centroid BLOB,
+                    n_confirmed INTEGER DEFAULT 0,
+                    baseline_cohesion REAL DEFAULT 1.0,
+                    current_cohesion REAL DEFAULT 1.0,
+                    created_at TEXT,
+                    last_updated TEXT
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE faces (
+                    id INTEGER PRIMARY KEY,
+                    image_id INTEGER,
+                    encoding BLOB,
+                    person_id INTEGER,
+                    assignment_status TEXT,
+                    det_score REAL
+                )
+                """
+            )
+
+            rng = np.random.default_rng(7)
+            raw = rng.normal(size=(1500, 512)).astype(np.float32)
+            norms = np.linalg.norm(raw, axis=1, keepdims=True)
+            embeddings = raw / np.maximum(norms, 1e-12)
+
+            cursor.executemany(
+                "INSERT INTO faces (id, image_id, encoding, person_id, assignment_status, det_score) VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    (i + 1, i + 1, encode_embedding(embeddings[i]), -1, None, 0.95)
+                    for i in range(1500)
+                ],
+            )
+            conn.commit()
+            conn.close()
+
+            module, _ = load_cluster_module_with_config(
+                "cluster_module_float64",
+                {
+                    "db_path": db_path,
+                    "assignment_audit_log_path": audit_path,
+                    "det_score_min_cluster": 0.70,
+                    "hdbscan_metric": "cosine",
+                    "hdbscan_cluster_selection_method": "leaf",
+                },
+            )
+
+            captured = {}
+
+            class FakeHDBSCAN:
+                metric = "cosine"
+                algorithm = "generic"
+
+                def __init__(self, *args, **kwargs):
+                    pass
+
+                def fit_predict(self, data):
+                    captured["dtype"] = str(data.dtype)
+                    return np.full(data.shape[0], -1, dtype=int)
+
+            original_hdbscan = module.hdbscan.HDBSCAN
+            module.hdbscan.HDBSCAN = FakeHDBSCAN
+            try:
+                module.main()
+            finally:
+                module.hdbscan.HDBSCAN = original_hdbscan
+            logger = module.logging.getLogger("face_assignment_audit")
+            for handler in list(logger.handlers):
+                handler.close()
+                logger.removeHandler(handler)
+
+            self.assertEqual(captured.get("dtype"), "float64")
 
     def test_small_face_filtered_in_extraction(self):
         module, _ = load_extraction_module_with_config(
